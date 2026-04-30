@@ -83,20 +83,35 @@ function getMime(filepath) {
   return MIME[path.extname(filepath).toLowerCase()] || 'application/octet-stream';
 }
 
-function serveFile(res, filepath, cacheControl) {
+function serveFile(res, filepath, cacheControl, req, etag) {
   fs.readFile(filepath, (err, data) => {
     if (err) {
       if (err.code === 'ENOENT') { res.writeHead(404); res.end('Not found'); }
       else { console.error(`Read error: ${filepath}`, err.message); res.writeHead(500); res.end('Read error'); }
       return;
     }
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': getMime(filepath),
-      'Content-Length': data.length,
       'Cache-Control': cacheControl || 'no-cache',
       'Access-Control-Allow-Origin': '*',
-    });
-    res.end(data);
+    };
+    if (etag) headers['ETag'] = etag;
+    // gzip for text-like content >1KB when client accepts it
+    const ae = req && req.headers && req.headers['accept-encoding'] || '';
+    if (data.length > 1024 && ae.includes('gzip') && /\.(json|html|js|css|txt|md|xml|svg|vtt)$/i.test(filepath)) {
+      const zlib = require('zlib');
+      zlib.gzip(data, (e, compressed) => {
+        if (e) { headers['Content-Length'] = data.length; res.writeHead(200, headers); res.end(data); return; }
+        headers['Content-Encoding'] = 'gzip';
+        headers['Content-Length'] = compressed.length;
+        res.writeHead(200, headers);
+        res.end(compressed);
+      });
+    } else {
+      headers['Content-Length'] = data.length;
+      res.writeHead(200, headers);
+      res.end(data);
+    }
   });
 }
 
@@ -248,7 +263,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /data/* → serve catalog data (never cache)
+  // /data/* → serve catalog data (ETag-based caching)
   if (pathname.startsWith('/data/')) {
     const rel = pathname.slice(6);
     const resolved = path.resolve(DIST, 'data', rel);
@@ -256,7 +271,19 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
-    serveFile(res, resolved, 'no-store, no-cache, must-revalidate');
+    // ETag support for catalog.json
+    try {
+      const stat = fs.statSync(resolved);
+      const etag = '"' + stat.mtimeMs.toString(36) + '-' + stat.size.toString(36) + '"';
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, { 'ETag': etag, 'Access-Control-Allow-Origin': '*' });
+        res.end();
+        return;
+      }
+      serveFile(res, resolved, 'no-cache', req, etag);
+    } catch {
+      serveFile(res, resolved, 'no-cache', req);
+    }
     return;
   }
 

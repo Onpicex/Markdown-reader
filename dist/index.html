@@ -657,26 +657,49 @@ loginPw.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
 
 // ── Load catalog ─────────────────────────────────────
 let inited=false;
-function refreshCatalog(){
-  fetch('data/catalog.json',{cache:'no-store'}).then(r=>r.json()).then(data=>{
-    C=data;
-    _wikiIndex=null; // reset wiki link index
-    renderSidebar(C,document.querySelector('.sf')?.value||'');
-    const ftSpan=sft.querySelector('span');
-    ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
-    ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
-    console.log('[live] catalog refreshed, '+C.totalArticles+' articles');
-  }).catch(e=>console.error('[live] catalog refresh failed',e));
+let catalogEtag=localStorage.getItem('catalog-etag')||'';
+
+function applyCatalog(data){
+  C=data;
+  _wikiIndex=null;
+  renderSidebar(C,document.querySelector('.sf')?.value||'');
+  const ftSpan=sft.querySelector('span');
+  ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
+  ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
 }
+
+async function fetchCatalog(){
+  try{
+    const headers={};
+    if(catalogEtag)headers['If-None-Match']=catalogEtag;
+    const r=await fetch('data/catalog.json',{headers});
+    if(r.status===304){console.log('[catalog] 304 not modified');return null;}
+    const etag=r.headers.get('etag')||'';
+    const data=await r.json();
+    if(etag){
+      try{localStorage.setItem('catalog-cache',JSON.stringify(data));localStorage.setItem('catalog-etag',etag);catalogEtag=etag;}catch(e){}
+    }
+    return data;
+  }catch(e){console.error('[catalog] fetch failed',e);return null;}
+}
+
+function refreshCatalog(){
+  fetchCatalog().then(data=>{if(data){applyCatalog(data);console.log('[live] catalog refreshed, '+data.totalArticles+' articles');}});
+}
+
 async function init(){
   if(inited)return;inited=true;
   try{
-    const r=await fetch('data/catalog.json',{cache:'no-store'});
-    C=await r.json();
-    renderSidebar(C);
-    const ftSpan=sft.querySelector('span');
-    ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
-    ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
+    // 1. Instant render from localStorage cache
+    const cached=localStorage.getItem('catalog-cache');
+    if(cached){
+      try{applyCatalog(JSON.parse(cached));console.log('[catalog] rendered from cache');}catch(e){localStorage.removeItem('catalog-cache');localStorage.removeItem('catalog-etag');}
+    }
+    // 2. Fetch latest (ETag — 304 if unchanged)
+    const data=await fetchCatalog();
+    if(data){applyCatalog(data);console.log('[catalog] updated from server, '+data.totalArticles+' articles');}
+    else if(!cached){snav.innerHTML='<div class="ld">加载失败</div>';return;}
+    // Load article from hash
     const id=location.hash.slice(1);
     if(id)loadArticle(decodeURIComponent(id));
     // SSE: live catalog updates
@@ -838,11 +861,9 @@ rescan.addEventListener('click',async function(){
     const r=await fetch('/api/rescan');
     const d=await r.json();
     if(d.ok){
-      const cr=await fetch('data/catalog.json',{cache:'no-store'});
-      C=await cr.json();
-      renderSidebar(C,search.value.trim());
-      const ftSpan=sft.querySelector('span');
-      ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
+      catalogEtag=''; // force full reload after rescan
+      const freshData=await fetchCatalog();
+      if(freshData)applyCatalog(freshData);
     }else{
       alert('扫描失败: '+(d.stderr||d.error||'未知错误'));
     }
