@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库阅读器</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fff;--bg-side:#fff;--bg-side-hover:#f7f7f7;--bg-side-active:#f2f0ed;
+  --gold:#B8860B;--gold-light:#D4A942;--gold-faint:rgba(184,134,11,.08);
+  --text:#353535;--text-2:#666;--text-3:#999;--text-title:#1a1a1a;
+  --border:#ebebeb;--border-lt:#f5f5f5;
+  --quote-bg:#fafafa;--code-bg:#f6f6f6;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+  --mono:"SF Mono","Fira Code",Consolas,monospace;
+  --side-w:280px;--fs:18px;--lh:2.0;--max-w:min(960px, 100%);--tr:.15s ease;
+  --read-color:#aaa;
+}
+.dark{
+  --bg:#1a1a1a;--bg-side:#1e1e1e;--bg-side-hover:#262626;--bg-side-active:#2e2e2e;
+  --gold:#D4A942;--gold-light:#E0BF6A;--gold-faint:rgba(212,169,66,.1);
+  --text:#ccc;--text-2:#999;--text-3:#666;--text-title:#e5e5e5;
+  --border:#333;--border-lt:#2a2a2a;
+  --quote-bg:#222;--code-bg:#252525;
+  --read-color:#555;
+}
+html{font-size:16px}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:var(--lh);overflow:hidden;height:100vh;transition:background var(--tr),color var(--tr)}
+.app{display:flex;height:100vh}
+
+/* ── Login ───────────────────────────────────────────── */
+.login-overlay{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center}
+.login-box{text-align:center;max-width:320px;padding:0 24px}
+.login-box .ico{font-size:44px;margin-bottom:14px}
+.login-box h2{font-size:20px;font-weight:700;color:var(--text-title);margin-bottom:20px}
+.login-box input{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:6px;font-size:15px;font-family:var(--font);background:var(--bg);color:var(--text);outline:none;text-align:center}
+.login-box input:focus{border-color:var(--gold)}
+.login-box .login-btn{margin-top:12px;width:100%;padding:10px;border:none;border-radius:6px;background:var(--gold);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--font)}
+.login-box .login-btn:hover{background:var(--gold-light)}
+.login-box .login-err{color:#e74c3c;font-size:13px;margin-top:8px;min-height:18px}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+.side{width:var(--side-w);min-width:var(--side-w);height:100vh;background:var(--bg-side);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:transform .25s ease,background var(--tr);z-index:100}
+.side-hd{padding:20px 16px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.side-brand{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.side-brand h1{font-size:15px;font-weight:700;color:var(--text-title);letter-spacing:.3px}
+.side-brand .ico{font-size:20px}
+.sbox{position:relative}
+.sbox input{width:100%;padding:7px 10px 7px 32px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color var(--tr)}
+.sbox input:focus{border-color:var(--gold)}
+.sbox input::placeholder{color:var(--text-3)}
+.sbox .si{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text-3);font-size:13px;pointer-events:none}
+.side-nav{flex:1;overflow-y:auto;padding:6px 0}
+.side-nav::-webkit-scrollbar{width:3px}
+.side-nav::-webkit-scrollbar-track{background:transparent}
+.side-nav::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.side-ft{padding:10px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--text-3);text-align:center;flex-shrink:0;display:flex;align-items:center;justify-content:space-between}
+
+/* Category / article items */
+.cg{margin-bottom:1px}
+.ch{display:flex;align-items:center;justify-content:space-between;padding:7px 16px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);user-select:none;transition:background var(--tr)}
+.ch:hover{background:var(--bg-side-hover)}
+.ch .cnt{font-size:11px;color:var(--text-3);font-weight:400;background:var(--border-lt);padding:1px 6px;border-radius:10px}
+.ch .arr{font-size:9px;color:var(--text-3);transition:transform .15s;margin-right:6px;display:inline-block}
+.ch.open .arr{transform:rotate(90deg)}
+.ci{display:none}.ci.open{display:block}
+
+/* Subcategory */
+.sh{display:flex;align-items:center;padding:5px 16px 5px 26px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text-3);user-select:none;transition:background var(--tr)}
+.sh:hover{background:var(--bg-side-hover);color:var(--text-2)}
+.sh .arr{font-size:8px;color:var(--text-3);transition:transform .15s;margin-right:5px;display:inline-block}
+.sh.open .arr{transform:rotate(90deg)}
+.si-items{display:none}.si-items.open{display:block}
+
+.ai{display:flex;align-items:center;padding:5px 16px 5px 34px;font-size:13px;color:var(--text-2);cursor:pointer;transition:background var(--tr),color var(--tr);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;position:relative;gap:6px}
+.ai.sub{padding-left:46px}
+.ai:hover{background:var(--bg-side-hover);color:var(--text)}
+.ai.active{color:var(--gold);font-weight:600;background:var(--gold-faint)}
+.ai.active::before{content:'';position:absolute;left:0;top:4px;bottom:4px;width:3px;background:var(--gold);border-radius:0 2px 2px 0}
+.ai .at{flex:1;overflow:hidden;text-overflow:ellipsis}
+.ai .rd{font-size:10px;color:var(--read-color);flex-shrink:0}
+.ai.read .at{color:var(--read-color)}
+
+/* ── Main ────────────────────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;height:100vh}
+.toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 24px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0;transition:background var(--tr)}
+.tb-l{display:flex;align-items:center;gap:8px}
+.tb-r{display:flex;align-items:center;gap:10px}
+.ham{display:none;background:none;border:none;font-size:20px;color:var(--text-2);cursor:pointer;padding:4px}
+.bc{font-size:13px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb-btn{background:none;border:1px solid var(--border);border-radius:5px;padding:3px 9px;font-size:13px;color:var(--text-2);cursor:pointer;font-family:var(--font);transition:all var(--tr);white-space:nowrap}
+.tb-btn:hover{border-color:var(--gold-light);color:var(--text)}
+
+.content{flex:1;overflow-y:auto;padding:40px 24px 80px}
+.content::-webkit-scrollbar{width:5px}
+.content::-webkit-scrollbar-track{background:transparent}
+.content::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── Article ─────────────────────────────────────────── */
+.article{max-width:var(--max-w);margin:0 auto}
+.art-hd{margin-bottom:32px;padding-bottom:20px;border-bottom:1px solid var(--border-lt)}
+.art-hd h1{font-size:26px;font-weight:700;line-height:1.4;color:var(--text-title);margin-bottom:10px}
+.art-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:13px;color:var(--text-3)}
+.art-meta .tag{display:inline-block;padding:2px 10px;background:var(--border-lt);border-radius:12px;font-size:12px;color:var(--text-2)}
+a.wl{color:#5b8af0;text-decoration:none;border-bottom:1px dashed #5b8af0;cursor:pointer;transition:color .2s,border-color .2s}
+a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
+.wl-broken{color:var(--text-3);border-bottom:1px dashed var(--text-3);cursor:default}
+.art-meta .author{color:var(--gold)}
+
+/* Body typography */
+/* Read toggle button */
+.art-actions{margin-top:12px}
+.art-ft{margin-top:32px;padding-top:20px;border-top:1px solid var(--border-lt);text-align:center}
+.read-toggle{display:inline-flex;align-items:center;gap:4px;padding:6px 16px;border:1px solid var(--border);border-radius:20px;background:var(--bg);color:var(--text-2);font-size:13px;font-family:var(--font);cursor:pointer;transition:all var(--tr)}
+.read-toggle:hover{border-color:var(--gold-light);color:var(--gold)}
+.read-toggle.is-read{background:var(--gold-faint);border-color:var(--gold);color:var(--gold)}
+
+.art-body{font-size:var(--fs);line-height:var(--lh);letter-spacing:.2px}
+.art-body p{margin-bottom:1.5em;text-align:justify}
+.art-body h1{font-size:1.5em;font-weight:700;margin:2em 0 .8em;color:var(--text-title);line-height:1.4}
+.art-body h2{font-size:1.3em;font-weight:700;margin:1.8em 0 .7em;color:var(--text-title);line-height:1.4;padding-bottom:6px;border-bottom:2px solid var(--border)}
+.art-body h3{font-size:1.12em;font-weight:700;margin:1.5em 0 .6em;color:var(--text-title)}
+.art-body h4,.art-body h5,.art-body h6{font-size:1em;font-weight:700;margin:1.3em 0 .5em;color:var(--text-2)}
+.art-body blockquote{margin:1.5em 0;padding:14px 18px;border-left:3px solid var(--gold);background:var(--quote-bg);border-radius:0 4px 4px 0;font-size:.95em;color:var(--text-2)}
+.art-body blockquote p{margin-bottom:.6em}
+.art-body blockquote p:last-child{margin-bottom:0}
+.art-body ul,.art-body ol{margin:1em 0 1.5em;padding-left:1.8em}
+.art-body li{margin-bottom:.4em}
+.art-body li>ul,.art-body li>ol{margin:.3em 0}
+.art-body strong{font-weight:700;color:var(--text-title)}
+.art-body em{font-style:italic}
+.art-body a{color:var(--gold);text-decoration:none;border-bottom:1px solid rgba(184,134,11,.3);transition:color var(--tr)}
+.art-body a:hover{color:var(--gold-light)}
+.art-body code{font-family:var(--mono);font-size:.85em;background:var(--code-bg);padding:2px 5px;border-radius:3px;color:var(--gold)}
+.art-body pre{margin:1.5em 0;padding:14px 18px;background:var(--code-bg);border-radius:6px;overflow-x:auto;font-size:.85em;line-height:1.6}
+.art-body pre code{background:none;padding:0;color:var(--text)}
+.art-body table{width:100%;margin:1.5em 0;border-collapse:collapse;font-size:.9em}
+.art-body th{font-weight:600;text-align:left;padding:8px 12px;border-bottom:2px solid var(--border);color:var(--text-title)}
+.art-body td{padding:7px 12px;border-bottom:1px solid var(--border-lt)}
+.art-body tr:last-child td{border-bottom:none}
+.art-body img{max-width:100%;height:auto;border-radius:4px;margin:1em 0}
+.art-body hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.audio-embed{margin:1.2em 0;padding:14px 16px;background:var(--quote-bg);border-radius:10px;border:1px solid var(--border-lt)}
+.audio-embed .audio-label{font-size:14px;color:var(--text-2);margin-bottom:8px;font-weight:500}
+.audio-embed audio{width:100%;height:40px;outline:none}
+.video-embed{margin:1.2em 0}
+.video-embed video{max-width:100%;border-radius:8px}
+
+/* ── Welcome ─────────────────────────────────────────── */
+.welcome{max-width:460px;margin:100px auto;text-align:center;padding:0 24px}
+.welcome .ico{font-size:44px;margin-bottom:14px}
+.welcome h2{font-size:20px;font-weight:700;margin-bottom:10px;color:var(--text-title)}
+.welcome p{font-size:14px;color:var(--text-3);line-height:1.6}
+.welcome .stats{margin-top:24px;display:flex;justify-content:center;gap:28px;flex-wrap:wrap}
+.welcome .st .num{display:block;font-size:28px;font-weight:700;color:var(--gold)}
+.welcome .st .lbl{font-size:12px;color:var(--text-3)}
+
+/* Loading */
+.ld{text-align:center;padding:60px 0;color:var(--text-3);font-size:14px}
+.ld .sp{display:inline-block;width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin .7s linear infinite;margin-bottom:10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Overlay */
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:90}
+.ov.on{display:block}
+
+/* Back to top */
+.btt{position:fixed;bottom:24px;right:24px;width:38px;height:38px;border-radius:50%;background:var(--gold);color:#fff;border:none;font-size:16px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;z-index:50;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.btt.vis{opacity:1;transform:translateY(0)}
+.btt:hover{background:var(--gold-light)}
+
+/* ── Share excerpt (书摘分享) ─────────────────────── */
+.share-bar{position:fixed;display:none;align-items:center;gap:2px;padding:4px;background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:150;transform:translateX(-50%);animation:shareIn .15s ease}
+.share-bar.vis{display:flex}
+@keyframes shareIn{from{opacity:0;transform:translateX(-50%) translateY(4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.share-bar button{display:flex;align-items:center;gap:4px;padding:6px 12px;border:none;border-radius:5px;background:none;color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;white-space:nowrap;transition:background .12s}
+.share-bar button:hover{background:var(--gold-faint);color:var(--gold)}
+
+/* Share card overlay */
+/* Share overlay */
+.share-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:300;align-items:center;justify-content:center;flex-direction:column;gap:14px}
+.share-overlay.on{display:flex}
+.share-card-wrap{position:relative;max-width:92vw;max-height:78vh;overflow:visible}
+
+/* ── Card base ── */
+.share-card{width:400px;max-width:88vw;border-radius:14px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.25);padding:36px 30px 24px;position:relative;font-family:var(--font);transition:all .25s ease}
+.share-card .sc-quote{position:relative;margin-bottom:20px}
+.share-card .sc-text{font-size:16px;line-height:1.95;text-align:justify;position:relative;z-index:1}
+.share-card .sc-src{display:flex;align-items:center;gap:10px;padding-top:14px}
+.share-card .sc-src .sc-ico{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.share-card .sc-src .sc-info{flex:1;min-width:0}
+.share-card .sc-src .sc-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-card .sc-src .sc-from{font-size:10px;margin-top:2px;opacity:.6}
+
+/* ── Theme: Pure (简约白) ── */
+.share-card.t-pure{background:#fff;color:#1a1a1a}
+.share-card.t-pure::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#D4A942,#B8860B,#D4A942)}
+.share-card.t-pure .sc-text{padding-left:16px;border-left:3px solid #D4A942;color:#2a2a2a}
+.share-card.t-pure .sc-quote::before{content:'\201C';position:absolute;top:-12px;left:-4px;font-size:52px;color:rgba(184,134,11,.15);font-family:Georgia,serif;line-height:1}
+.share-card.t-pure .sc-src{border-top:1px solid #f0f0f0}
+.share-card.t-pure .sc-ico{background:linear-gradient(135deg,#D4A942,#B8860B);color:#fff}
+.share-card.t-pure .sc-title{color:#353535}
+.share-card.t-pure .sc-from{color:#999}
+
+/* ── Theme: Literary (文艺纸) ── */
+.share-card.t-literary{background:linear-gradient(170deg,#fdf8ef,#f5ecda);color:#3a2e1e}
+.share-card.t-literary .sc-text{padding:16px 20px;background:rgba(255,255,255,.45);border-radius:8px;color:#3a2e1e;font-style:italic}
+.share-card.t-literary .sc-quote::before{content:'\2766';position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:24px;color:rgba(160,120,60,.3)}
+.share-card.t-literary .sc-src{border-top:1px dashed rgba(160,120,60,.3)}
+.share-card.t-literary .sc-ico{background:rgba(160,120,60,.15);color:#8a6e3e}
+.share-card.t-literary .sc-title{color:#5a4a2e}
+.share-card.t-literary .sc-from{color:#a08860}
+
+/* ── Theme: Dark (暗夜) ── */
+.share-card.t-dark{background:linear-gradient(170deg,#1e1e2a,#16161e);color:#e0e0e0}
+.share-card.t-dark .sc-text{padding-left:16px;border-left:3px solid #7b68ee;color:#ddd}
+.share-card.t-dark .sc-quote::before{content:'\201C';position:absolute;top:-12px;left:-4px;font-size:52px;color:rgba(123,104,238,.2);font-family:Georgia,serif;line-height:1}
+.share-card.t-dark .sc-src{border-top:1px solid rgba(255,255,255,.08)}
+.share-card.t-dark .sc-ico{background:linear-gradient(135deg,#7b68ee,#5b4ec7);color:#fff}
+.share-card.t-dark .sc-title{color:#e8e8e8}
+.share-card.t-dark .sc-from{color:#888}
+
+/* ── Theme: Green (清新绿) ── */
+.share-card.t-green{background:linear-gradient(170deg,#f0f7f0,#e2f0e2);color:#2a3a2a}
+.share-card.t-green .sc-text{padding-left:16px;border-left:3px solid #5aac5a;color:#2e3e2e}
+.share-card.t-green .sc-quote::before{content:'\2618';position:absolute;top:-14px;left:-2px;font-size:28px;color:rgba(90,172,90,.25);line-height:1}
+.share-card.t-green .sc-src{border-top:1px solid rgba(90,172,90,.2)}
+.share-card.t-green .sc-ico{background:linear-gradient(135deg,#5aac5a,#3e8a3e);color:#fff}
+.share-card.t-green .sc-title{color:#2e4a2e}
+.share-card.t-green .sc-from{color:#7a9a7a}
+
+/* ── Theme switcher ── */
+.share-themes{display:flex;gap:8px;justify-content:center}
+.share-themes button{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:all .15s;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.share-themes button:hover{transform:scale(1.15)}
+.share-themes button.active{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.4),0 2px 8px rgba(0,0,0,.2)}
+.share-themes .st-pure{background:linear-gradient(135deg,#fff,#f5f0e8)}
+.share-themes .st-literary{background:linear-gradient(135deg,#fdf8ef,#e8d9b8)}
+.share-themes .st-dark{background:linear-gradient(135deg,#2a2a3a,#16161e)}
+.share-themes .st-green{background:linear-gradient(135deg,#e2f0e2,#aad4aa)}
+
+/* ── Action buttons ── */
+.share-actions{display:flex;gap:8px}
+.share-actions button{padding:9px 20px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all .15s}
+.share-actions .sa-copy{background:rgba(255,255,255,.9);color:#333;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.share-actions .sa-copy:hover{background:#fff}
+.share-actions .sa-save{background:var(--gold);color:#fff}
+.share-actions .sa-save:hover{background:var(--gold-light)}
+.share-actions .sa-close{background:rgba(255,255,255,.12);color:rgba(255,255,255,.8);border:1px solid rgba(255,255,255,.2)}
+.share-actions .sa-close:hover{background:rgba(255,255,255,.2);color:#fff}
+@media(max-width:420px){
+  .share-card{padding:28px 22px 20px}
+  .share-card .sc-text{font-size:15px}
+  .share-actions button{padding:8px 14px;font-size:12px}
+  .share-actions{gap:6px}
+}
+
+/* Rescan button */
+.rescan-btn{background:none;border:none;cursor:pointer;font-size:13px;color:var(--text-3);padding:2px 6px;border-radius:4px;transition:all var(--tr)}
+.rescan-btn:hover{color:var(--gold);background:var(--gold-faint)}
+.rescan-btn.spinning{animation:spin .7s linear infinite}
+
+/* Settings modal */
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:200;align-items:center;justify-content:center}
+.modal-bg.on{display:flex}
+.modal{background:var(--bg);border-radius:10px;padding:24px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.12)}
+.modal h3{font-size:16px;font-weight:700;color:var(--text-title);margin-bottom:16px}
+.modal label{display:block;font-size:13px;color:var(--text-2);margin-bottom:4px}
+.modal input[type=text]{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font);background:var(--bg);color:var(--text);outline:none;margin-bottom:14px}
+.modal input[type=text]:focus{border-color:var(--gold)}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end}
+.modal-btns button{padding:6px 16px;border-radius:5px;font-size:13px;cursor:pointer;font-family:var(--font);border:1px solid var(--border);background:var(--bg);color:var(--text-2)}
+.modal-btns button.primary{background:var(--gold);color:#fff;border-color:var(--gold)}
+.modal-btns button:hover{opacity:.85}
+
+/* ── Responsive ──────────────────────────────────────── */
+@media(max-width:1024px){
+  .side{position:fixed;left:0;top:0;transform:translateX(-100%)}
+  .side.open{transform:translateX(0);box-shadow:4px 0 20px rgba(0,0,0,.06)}
+  .ham{display:block}
+}
+@media(max-width:768px){
+  .content{padding:20px 16px 60px}
+  .art-hd h1{font-size:20px}
+  .art-body{font-size:calc(var(--fs) - 1px);line-height:1.85}
+  .art-body blockquote{padding:10px 14px}
+  .art-body pre{padding:10px 12px;font-size:.8em}
+  .toolbar{padding:6px 12px}
+  .tb-r{gap:6px}
+  .tb-btn{padding:2px 7px;font-size:12px}
+  .welcome{margin:60px auto;padding:0 16px}
+  .welcome h2{font-size:18px}
+  .modal{padding:20px 16px;width:95%}
+  .login-box{padding:0 16px}
+}
+@media(max-width:420px){
+  .content{padding:16px 12px 50px}
+  .art-hd h1{font-size:18px}
+  .art-body{font-size:calc(var(--fs) - 2px)}
+  .bc{max-width:140px;font-size:12px}
+  .side{width:85vw;min-width:85vw}
+  .btt{bottom:16px;right:16px;width:34px;height:34px;font-size:14px}
+}
+*{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+</style>
+</head>
+<body>
+
+<!-- Login overlay -->
+<div class="login-overlay" id="loginOverlay" style="display:none">
+  <div class="login-box">
+    <div class="ico">🔒</div>
+    <h2>知识库阅读器</h2>
+    <input type="password" id="loginPw" placeholder="请输入访问密码" autocomplete="current-password">
+    <button class="login-btn" id="loginBtn">进入</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3>⚙️ 设置</h3>
+    <label>Obsidian Vault 路径</label>
+    <input type="text" id="cfgVault" placeholder="/path/to/obsidian/vault">
+    <div class="modal-btns" style="margin-bottom:18px">
+      <button id="cfgCancel">取消</button>
+      <button class="primary" id="cfgSave">保存并重新扫描</button>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:14px">
+      <h3 style="font-size:14px;margin-bottom:12px">🔒 修改密码</h3>
+      <label>原密码</label>
+      <input type="password" id="pwOld" placeholder="当前密码" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font);background:var(--bg);color:var(--text);outline:none;margin-bottom:10px">
+      <label>新密码<span style="color:var(--text-3);font-weight:400">  （留空则关闭密码）</span></label>
+      <input type="password" id="pwNew" placeholder="新密码" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font);background:var(--bg);color:var(--text);outline:none;margin-bottom:10px">
+      <label>确认新密码</label>
+      <input type="password" id="pwConfirm" placeholder="再次输入新密码" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:5px;font-size:13px;font-family:var(--font);background:var(--bg);color:var(--text);outline:none;margin-bottom:10px">
+      <div class="pw-msg" id="pwMsg" style="font-size:12px;min-height:16px;margin-bottom:8px"></div>
+      <div class="modal-btns">
+        <button class="primary" id="pwSave">修改密码</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="app" id="app" style="display:none">
+  <aside class="side" id="side">
+    <div class="side-hd">
+      <div class="side-brand"><span class="ico">📖</span><h1>知识库阅读器</h1></div>
+      <div class="sbox"><span class="si">🔍</span><input type="text" id="search" placeholder="搜索文章..." autocomplete="off"></div>
+    </div>
+    <nav class="side-nav" id="snav"><div class="ld"><div class="sp"></div><div>加载目录中...</div></div></nav>
+    <div class="side-ft" id="sft">
+      <span></span>
+      <span>
+        <button class="rescan-btn" id="settings" title="设置">⚙️</button>
+        <button class="rescan-btn" id="rescan" title="重新扫描 vault">🔄</button>
+      </span>
+    </div>
+  </aside>
+  <div class="ov" id="ov"></div>
+  <main class="main">
+    <div class="toolbar">
+      <div class="tb-l"><button class="ham" id="ham">☰</button><span class="bc" id="bc"></span></div>
+      <div class="tb-r">
+        <button class="tb-btn" id="fdec">A-</button>
+        <button class="tb-btn" id="frst" title="重置字体">A</button>
+        <button class="tb-btn" id="finc">A+</button>
+        <button class="tb-btn" id="thm">🌙</button>
+      </div>
+    </div>
+    <div class="content" id="ct">
+      <div class="welcome" id="wc">
+        <div class="ico">📖</div>
+        <h2>知识库阅读器</h2>
+        <p>你的个人知识库，某平台网页版阅读体验。<br>从左侧选择一篇文章开始阅读。</p>
+        <div class="stats" id="ws"></div>
+      </div>
+    </div>
+  </main>
+</div>
+<button class="btt" id="btt">↑</button>
+
+<!-- Share excerpt bar (appears on text selection) -->
+<div class="share-bar" id="shareBar">
+  <button id="shareExcerpt">📋 分享书摘</button>
+</div>
+
+<!-- Share card overlay -->
+<div class="share-overlay" id="shareOverlay">
+  <div class="share-card-wrap">
+    <div class="share-card t-pure" id="shareCard">
+      <div class="sc-quote">
+        <div class="sc-text" id="scText"></div>
+      </div>
+      <div class="sc-src">
+        <div class="sc-ico">📖</div>
+        <div class="sc-info">
+          <div class="sc-title" id="scTitle"></div>
+          <div class="sc-from">来自「知识库阅读器」</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="share-themes" id="shareThemes">
+    <button class="st-pure active" data-theme="t-pure" title="简约白"></button>
+    <button class="st-literary" data-theme="t-literary" title="文艺纸"></button>
+    <button class="st-dark" data-theme="t-dark" title="暗夜"></button>
+    <button class="st-green" data-theme="t-green" title="清新绿"></button>
+  </div>
+  <div class="share-actions">
+    <button class="sa-copy" id="saCopy">📋 复制文字</button>
+    <button class="sa-save" id="saSave">💾 保存图片</button>
+    <button class="sa-close" id="saClose">✕ 关闭</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+<script>
+!function(){"use strict";
+
+const DEFAULT_FS=18;
+let C=null,curId=null,fs=DEFAULT_FS,dark=false;
+const $=id=>document.getElementById(id);
+const app=$('app'),loginOverlay=$('loginOverlay'),loginPw=$('loginPw'),loginBtn=$('loginBtn'),loginErr=$('loginErr');
+const side=$('side'),ov=$('ov'),snav=$('snav'),sft=$('sft'),search=$('search'),
+      ct=$('ct'),bc=$('bc'),ham=$('ham'),thm=$('thm'),fdec=$('fdec'),frst=$('frst'),
+      finc=$('finc'),btt=$('btt'),ws=$('ws'),rescan=$('rescan'),settings=$('settings');
+const modalBg=$('modalBg'),cfgVault=$('cfgVault'),cfgCancel=$('cfgCancel'),cfgSave=$('cfgSave');
+const pwOld=$('pwOld'),pwNew=$('pwNew'),pwConfirm=$('pwConfirm'),pwSave=$('pwSave'),pwMsg=$('pwMsg');
+
+// ── Read state (localStorage) ────────────────────────
+function getReadSet(){
+  try{ return new Set(JSON.parse(localStorage.getItem('readArticles')||'[]')); }catch(e){ return new Set(); }
+}
+function saveReadSet(s){
+  try{ localStorage.setItem('readArticles',JSON.stringify([...s])); }catch(e){}
+}
+function markRead(id){
+  const s=getReadSet(); s.add(id); saveReadSet(s);
+}
+function unmarkRead(id){
+  const s=getReadSet(); s.delete(id); saveReadSet(s);
+}
+function toggleRead(id){
+  if(isRead(id)){unmarkRead(id)}else{markRead(id)}
+  updateReadUI(id);
+}
+function isRead(id){ return getReadSet().has(id); }
+function updateReadUI(id){
+  const rd=isRead(id);
+  // Update sidebar item
+  const ai=document.querySelector('.ai[data-id="'+CSS.escape(id)+'"]');
+  if(ai){
+    ai.classList.toggle('read',rd);
+    let badge=ai.querySelector('.rd');
+    if(rd&&!badge){badge=document.createElement('span');badge.className='rd';badge.textContent='\u2713';ai.appendChild(badge);}
+    if(!rd&&badge)badge.remove();
+  }
+  // Update all read-toggle buttons in article
+  document.querySelectorAll('.read-toggle').forEach(btn=>{
+    btn.textContent=rd?'\u2713 \u5df2\u8bfb':'\u25cb \u6807\u8bb0\u5df2\u8bfb';
+    btn.classList.toggle('is-read',rd);
+  });
+}
+
+// ── Helpers ──────────────────────────────────────────
+function h(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function ha(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+function hsh(s){let v=0;for(let i=0;i<s.length;i++){v=((v<<5)-v)+s.charCodeAt(i);v|=0}return'h'+Math.abs(v)}
+
+// ── Image fallback: _assets → same directory ────────
+function imgFallback(img){
+  const src=img.getAttribute('src')||'';
+  // If currently trying _assets path, fall back to same-directory path
+  if(src.includes('_assets/')||src.includes('_assets%2F')){
+    const parts=src.split(/_assets[\/\/]|_assets%2[Ff]/);
+    if(parts.length===2){
+      // Rebuild: remove the _assets/basename_assets/ segment, keep the filename
+      const dirPart=src.replace(/[^\/]+_assets[\/\/][^\/]*$/,'').replace(/[^\/]+_assets%2[Ff][^\/]*$/,'');
+      // Get the directory before _assets folder
+      const m=src.match(/^(.*\/vault\/.*\/)([^\/]+)_assets[\/\/](.+)$/)||src.match(/^(.*\/vault\/.*\/)([^\/]+)_assets%2[Ff](.+)$/);
+      if(m){
+        img.src=m[1]+m[3];
+        return;
+      }
+    }
+  }
+  // Hide broken image
+  img.style.display='none';
+}
+
+// ── Configure marked ─────────────────────────────────
+marked.setOptions({ gfm:true, breaks:true, smartypants:false });
+
+// ── Wiki link title → article id lookup ─────────────
+let _wikiIndex=null;
+function buildWikiIndex(){
+  if(!C||_wikiIndex)return;
+  _wikiIndex={};
+  for(const a of C.articles){
+    // map by filename without .md (case-insensitive)
+    const fn=a.id.split('/').pop().replace(/\.md$/i,'');
+    _wikiIndex[fn.toLowerCase()]=a.id;
+    // also map by display title
+    if(a.title)_wikiIndex[a.title.toLowerCase()]=a.id;
+    // map without numeric prefix (e.g. "001 标题" → "标题")
+    const noNum=fn.replace(/^\d+[_.\s-]*/,'');
+    if(noNum&&noNum!==fn)_wikiIndex[noNum.toLowerCase()]=a.id;
+    if(a.title){
+      const tNoNum=a.title.replace(/^\d+[_.\s-]*/,'');
+      if(tNoNum&&tNoNum!==a.title)_wikiIndex[tNoNum.toLowerCase()]=a.id;
+    }
+  }
+}
+function resolveWikiLink(name){
+  if(!_wikiIndex)buildWikiIndex();
+  if(!_wikiIndex)return null;
+  const key=name.trim().toLowerCase();
+  if(_wikiIndex[key])return _wikiIndex[key];
+  // try with .md suffix stripped if present
+  const k2=key.replace(/\.md$/,'');
+  if(_wikiIndex[k2])return _wikiIndex[k2];
+  // support path-style links: "某平台课程/决策的54个基本/01-概率与期望值" → match article id
+  // try appending .md and checking with common prefixes
+  if(C){
+    const withMd=key.endsWith('.md')?key:key+'.md';
+    for(const a of C.articles){
+      if(a.id.toLowerCase()===withMd||a.id.toLowerCase()==='wiki/'+withMd||a.id.toLowerCase()==='raw/'+withMd)return a.id;
+    }
+    // partial path match: if key contains '/', match end of article id
+    if(key.includes('/')){
+      for(const a of C.articles){
+        const aid=a.id.toLowerCase();
+        if(aid.endsWith('/'+withMd)||aid.endsWith('/'+k2+'.md'))return a.id;
+      }
+    }
+  }
+  return null;
+}
+// Convert [[wiki links]] in markdown text before marked parses it
+function convertWikiLinks(md){
+  // First: convert ![[image]] embeds to standard markdown images
+  md=md.replace(/!\[\[([^\]]+?)(?:\|([^\]]*?))?\]\]/g, function(_,target,alt){
+    const t=target.trim();
+    if(/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(t)){
+      // Encode path segments for marked compatibility (spaces/Chinese chars break parsing)
+      const encoded=t.split('/').map(s=>encodeURIComponent(s)).join('/');
+      return '!['+(alt||'').trim()+']('+encoded+')';
+    }
+    // Audio embed → <audio> player
+    if(/\.(mp3|wav|ogg|m4a)$/i.test(t)){
+      const encoded='/vault/'+t.split('/').map(s=>encodeURIComponent(s)).join('/');
+      const label=(alt||t.split('/').pop().replace(/\.[^.]+$/,'')).trim();
+      return '<div class="audio-embed"><div class="audio-label">\ud83c\udfb5 '+label+'</div><audio controls preload="metadata" src="'+encoded+'"></audio></div>';
+    }
+    // Video embed → <video> player
+    if(/\.(mp4|webm)$/i.test(t)){
+      const encoded='/vault/'+t.split('/').map(s=>encodeURIComponent(s)).join('/');
+      return '<div class="video-embed"><video controls preload="metadata" src="'+encoded+'" style="max-width:100%;border-radius:8px"></video></div>';
+    }
+    // Non-media embed — treat as wiki link
+    return '[['+target+(alt?'|'+alt:'')+']]';
+  });
+  // Then: convert [[wiki links]] to HTML
+  return md.replace(/\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g, function(_,target,alias){
+    const display=alias||target;
+    const aid=resolveWikiLink(target);
+    if(aid){
+      return '<a class="wl" href="javascript:void(0)" data-wl="'+aid.replace(/"/g,'&quot;')+'">'+h(display)+'</a>';
+    }
+    return '<span class="wl wl-broken" title="未找到: '+h(target)+'">'+h(display)+'</span>';
+  });
+}
+
+// ── Strip frontmatter ────────────────────────────────
+function stripFrontmatter(md){
+  if(!md.startsWith('---'))return {meta:{},body:md};
+  const m=md.slice(3).match(/\n---\s*\n/);
+  if(!m)return {meta:{},body:md};
+  const fmText=md.slice(3,3+m.index);
+  const body=md.slice(3+m.index+m[0].length);
+  const meta={};
+  for(const line of fmText.split('\n')){
+    const kv=line.match(/^(\w+)\s*:\s*(.+)/);
+    if(kv)meta[kv[1]]=kv[2].replace(/^["']|["']$/g,'').trim();
+  }
+  return {meta,body};
+}
+
+// ── Auth ─────────────────────────────────────────────
+async function checkAuth(){
+  try{
+    const r=await fetch('/api/check-auth');
+    const d=await r.json();
+    if(!d.needsAuth || d.authed){
+      loginOverlay.style.display='none';
+      app.style.display='flex';
+      init();
+    }else{
+      loginOverlay.style.display='flex';
+      app.style.display='none';
+      loginPw.focus();
+    }
+  }catch(e){
+    // If check fails, just show app (server might not support auth)
+    loginOverlay.style.display='none';
+    app.style.display='flex';
+    init();
+  }
+}
+
+async function doLogin(){
+  loginErr.textContent='';
+  const pw=loginPw.value.trim();
+  if(!pw){loginErr.textContent='请输入密码';return;}
+  try{
+    const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    const d=await r.json();
+    if(d.ok){
+      loginOverlay.style.display='none';
+      app.style.display='flex';
+      init();
+    }else{
+      loginErr.textContent=d.error||'密码错误';
+      loginPw.select();
+    }
+  }catch(e){loginErr.textContent='请求失败';}
+}
+loginBtn.addEventListener('click',doLogin);
+loginPw.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+
+// ── Load catalog ─────────────────────────────────────
+let inited=false;
+function refreshCatalog(){
+  fetch('data/catalog.json',{cache:'no-store'}).then(r=>r.json()).then(data=>{
+    C=data;
+    _wikiIndex=null; // reset wiki link index
+    renderSidebar(C,document.querySelector('.sf')?.value||'');
+    const ftSpan=sft.querySelector('span');
+    ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
+    ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
+    console.log('[live] catalog refreshed, '+C.totalArticles+' articles');
+  }).catch(e=>console.error('[live] catalog refresh failed',e));
+}
+async function init(){
+  if(inited)return;inited=true;
+  try{
+    const r=await fetch('data/catalog.json',{cache:'no-store'});
+    C=await r.json();
+    renderSidebar(C);
+    const ftSpan=sft.querySelector('span');
+    ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
+    ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
+    const id=location.hash.slice(1);
+    if(id)loadArticle(decodeURIComponent(id));
+    // SSE: live catalog updates
+    if(typeof EventSource!=='undefined'){
+      const es=new EventSource('/api/events');
+      es.onmessage=function(e){
+        if(e.data==='catalog-updated') refreshCatalog();
+      };
+      es.onerror=function(){ setTimeout(()=>{ try{es.close()}catch{} },5000); };
+    }
+  }catch(e){snav.innerHTML='<div class="ld">加载失败</div>';console.error(e)}
+}
+
+// ── Render sidebar ───────────────────────────────────
+function renderSidebar(cat,filter){
+  const fl=(filter||'').toLowerCase();
+  const readSet=getReadSet();
+  let out='';
+  const sections={'\ud83d\udcc2 Raw':[],'\ud83d\udcda Wiki':[]};
+  for(const a of cat.articles){
+    if(fl&&!a.title.toLowerCase().includes(fl))continue;
+    sections[a.category]=sections[a.category]||[];
+    sections[a.category].push(a);
+  }
+  const secOrder=['\ud83d\udcc2 Raw','\ud83d\udcda Wiki'];
+  for(const sec of secOrder){
+    const arts=sections[sec];if(!arts||!arts.length)continue;
+    const secId=hsh(sec);
+    // Level 1: always open
+    out+='<div class="cg"><div class="ch open" data-t="'+secId+'"><span><span class="arr">▶</span>'+h(sec)+'</span><span class="cnt">'+arts.length+'</span></div><div class="ci open" id="'+secId+'">';
+    const sg={},ns=[];
+    for(const a of arts){if(a.subcategory){if(!sg[a.subcategory])sg[a.subcategory]=[];sg[a.subcategory].push(a)}else ns.push(a)}
+    for(const a of ns){out+=artItem(a,false,readSet)}
+    const sk=Object.keys(sg).sort();
+    const topSubs={};
+    for(const s of sk){
+      const p=s.split('/');const t=p[0];
+      if(!topSubs[t])topSubs[t]=[];
+      topSubs[t].push({key:s,sub:p.length>1?p.slice(1).join('/'):null,arts:sg[s]});
+    }
+    const tsk=Object.keys(topSubs).sort();
+    for(const t of tsk){
+      const items=topSubs[t];
+      const totalInTop=items.reduce((n,i)=>n+i.arts.length,0);
+      const tid=hsh(sec+t);
+      // Level 2: collapsed by default
+      out+='<div class="sh" data-t="'+tid+'"><span class="arr">▶</span>'+h(t)+' <span style="color:var(--text-3);font-weight:400">('+totalInTop+')</span></div><div class="si-items" id="'+tid+'">';
+      if(items.length===1&&!items[0].sub){
+        for(const a of items[0].arts)out+=artItem(a,true,readSet);
+      }else{
+        for(const item of items){
+          if(item.sub){
+            const sid=hsh(sec+item.key);
+            const sopen=!!fl;
+            out+='<div class="sh'+(sopen?' open':'')+'" data-t="'+sid+'" style="padding-left:38px;font-size:11px"><span class="arr">▶</span>'+h(item.sub)+' ('+item.arts.length+')</div><div class="si-items'+(sopen?' open':'')+'" id="'+sid+'">';
+            for(const a of item.arts)out+=artItem(a,true,readSet);
+            out+='</div>';
+          }else{
+            for(const a of item.arts)out+=artItem(a,true,readSet);
+          }
+        }
+      }
+      out+='</div>';
+    }
+    out+='</div></div>';
+  }
+  if(!out)out='<div class="ld">无匹配结果</div>';
+  snav.innerHTML=out;
+}
+
+function artItem(a,sub,readSet){
+  const act=a.id===curId?' active':'';
+  const rd=readSet.has(a.id);
+  return '<div class="ai'+(sub?' sub':'')+(rd?' read':'')+act+'" data-id="'+ha(a.id)+'" title="'+ha(a.title)+'"><span class="at">'+h(a.title)+'</span>'+(rd?'<span class="rd">✓</span>':'')+'</div>';
+}
+
+// ── Load article (fetch raw markdown, render in browser) ─
+async function loadArticle(id){
+  ct.innerHTML='<div class="ld"><div class="sp"></div><div>加载中...</div></div>';
+  try{
+    const r=await fetch('/vault/'+encodeURI(id),{cache:'no-store'});
+    if(!r.ok)throw new Error(r.status);
+    const mdText=await r.text();
+    const {meta,body}=stripFrontmatter(mdText);
+    const artInfo=C?C.articles.find(a=>a.id===id):null;
+    const title=artInfo?artInfo.title:(meta.title||id.split('/').pop().replace('.md',''));
+    const catName=artInfo?artInfo.category:'';
+    curId=id;
+    location.hash=encodeURIComponent(id);
+    bc.textContent=(catName?catName+' › ':'')+title;
+    let metaHtml='';
+    const am=artInfo?artInfo.meta:meta;
+    if(am.author)metaHtml+='<span class="author">'+h(String(am.author))+'</span>';
+    if(am.progress)metaHtml+='<span>进度 '+h(String(am.progress))+'</span>';
+    const tags=am.tags;
+    if(tags&&Array.isArray(tags))for(const t of tags)metaHtml+='<span class="tag">'+h(String(t))+'</span>';
+    const wikiBody=convertWikiLinks(body);
+    // Resolve relative image paths to vault directory (with _assets fallback)
+    const artDir='/vault/'+encodeURI(id.replace(/\/[^\/]+$/,''))+'/';
+    const artBasename=id.split('/').pop().replace(/\.md$/i,'');
+    const renderer=new marked.Renderer();
+    renderer.image=function({href,title,text}){
+      let src=href||'';
+      // Only transform relative paths (not absolute URLs or /vault/ paths)
+      if(src&&!src.startsWith('http')&&!src.startsWith('/')){
+        // href is already percent-encoded by convertWikiLinks, just prepend /vault/
+        src='/vault/'+src;
+      }
+      const alt=text||'';
+      const t=title?' title="'+ha(title)+'"':'';
+      return '<img src="'+src+'" alt="'+ha(alt)+'"'+t+' loading="lazy">';
+    };
+    const htmlContent=marked.parse(wikiBody,{renderer});
+    const rd=isRead(id);
+    const rdLabel=rd?'\u2713 \u5df2\u8bfb':'\u25cb \u6807\u8bb0\u5df2\u8bfb';
+    const rdCls='read-toggle'+(rd?' is-read':'');
+    const rdBtn='<button class="'+rdCls+'">'+rdLabel+'</button>';
+    ct.innerHTML='<div class="article"><div class="art-hd"><h1>'+h(title)+'</h1>'+(metaHtml?'<div class="art-meta">'+metaHtml+'</div>':'')+'<div class="art-actions">'+rdBtn+'</div></div><div class="art-body">'+htmlContent+'</div><div class="art-ft">'+rdBtn+'</div></div>';
+    ct.scrollTop=0;
+    // Bind read-toggle buttons
+    ct.querySelectorAll('.read-toggle').forEach(btn=>btn.addEventListener('click',()=>toggleRead(id)));
+    // Bind wiki links
+    ct.querySelectorAll('a.wl[data-wl]').forEach(a=>a.addEventListener('click',function(e){
+      e.preventDefault();
+      loadArticle(this.dataset.wl);
+    }));
+    // Update sidebar active
+    document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
+    const el=document.querySelector('.ai[data-id="'+CSS.escape(id)+'"]');
+    if(el){
+      el.classList.add('active');
+      el.scrollIntoView({block:'nearest'});
+    }
+    closeSide();
+  }catch(e){
+    ct.innerHTML='<div class="ld">文章加载失败</div>';
+    console.error(e);
+  }
+}
+
+// ── Event: sidebar clicks ────────────────────────────
+snav.addEventListener('click',function(e){
+  const ch=e.target.closest('.ch,.sh');
+  if(ch){
+    ch.classList.toggle('open');
+    const t=document.getElementById(ch.dataset.t);
+    if(t)t.classList.toggle('open');
+    return;
+  }
+  const ai=e.target.closest('.ai');
+  if(ai&&ai.dataset.id)loadArticle(ai.dataset.id);
+});
+
+// ── Rescan button ────────────────────────────────────
+rescan.addEventListener('click',async function(){
+  rescan.classList.add('spinning');
+  try{
+    const r=await fetch('/api/rescan');
+    const d=await r.json();
+    if(d.ok){
+      const cr=await fetch('data/catalog.json',{cache:'no-store'});
+      C=await cr.json();
+      renderSidebar(C,search.value.trim());
+      const ftSpan=sft.querySelector('span');
+      ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
+    }else{
+      alert('扫描失败: '+(d.stderr||d.error||'未知错误'));
+    }
+  }catch(e){
+    alert('扫描请求失败');
+    console.error(e);
+  }finally{
+    rescan.classList.remove('spinning');
+  }
+});
+
+// ── Settings modal ───────────────────────────────────
+settings.addEventListener('click',async function(){
+  try{
+    const r=await fetch('/api/config');
+    const d=await r.json();
+    cfgVault.value=d.vault||'';
+  }catch(e){}
+  modalBg.classList.add('on');
+});
+cfgCancel.addEventListener('click',()=>modalBg.classList.remove('on'));
+modalBg.addEventListener('click',e=>{if(e.target===modalBg)modalBg.classList.remove('on')});
+cfgSave.addEventListener('click',async function(){
+  const vault=cfgVault.value.trim();
+  if(!vault){alert('路径不能为空');return;}
+  try{
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vault})});
+    const d=await r.json();
+    if(d.ok){
+      modalBg.classList.remove('on');
+      rescan.click();
+    }else{
+      alert('保存失败: '+(d.error||''));
+    }
+  }catch(e){alert('请求失败');}
+});
+
+// ── Password change ──────────────────────────────────────
+function showPwMsg(msg,ok){
+  pwMsg.textContent=msg;
+  pwMsg.style.color=ok?'#27ae60':'#e74c3c';
+}
+pwSave.addEventListener('click',async function(){
+  pwMsg.textContent='';
+  const o=pwOld.value,n=pwNew.value,c=pwConfirm.value;
+  if(n&&n!==c){showPwMsg('两次密码不一致',false);return;}
+  try{
+    const r=await fetch('/api/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({oldPassword:o,newPassword:n})});
+    const d=await r.json();
+    if(d.ok){
+      showPwMsg(d.msg||'密码已更新',true);
+      pwOld.value='';pwNew.value='';pwConfirm.value='';
+    }else{
+      showPwMsg(d.error||'修改失败',false);
+    }
+  }catch(e){showPwMsg('请求失败',false);}
+});
+
+// ── Search ───────────────────────────────────────────
+let searchTimer;
+search.addEventListener('input',function(){
+  clearTimeout(searchTimer);
+  searchTimer=setTimeout(()=>{if(C)renderSidebar(C,search.value.trim())},200);
+});
+
+// ── Theme toggle ─────────────────────────────────────
+thm.addEventListener('click',function(){
+  dark=!dark;
+  document.body.classList.toggle('dark',dark);
+  thm.textContent=dark?'☀️':'🌙';
+  try{localStorage.setItem('theme',dark?'dark':'light')}catch(e){}
+});
+
+// ── Font size ────────────────────────────────────────
+function setFs(v){
+  fs=Math.max(14,Math.min(24,v));
+  document.documentElement.style.setProperty('--fs',fs+'px');
+  try{localStorage.setItem('fs',fs)}catch(e){}
+}
+fdec.addEventListener('click',()=>setFs(fs-1));
+finc.addEventListener('click',()=>setFs(fs+1));
+frst.addEventListener('click',()=>{setFs(DEFAULT_FS);try{localStorage.removeItem('fs')}catch(e){}});
+
+// ── Mobile sidebar ───────────────────────────────────
+function openSide(){side.classList.add('open');ov.classList.add('on')}
+function closeSide(){side.classList.remove('open');ov.classList.remove('on')}
+ham.addEventListener('click',openSide);
+ov.addEventListener('click',closeSide);
+
+// ── Back to top ──────────────────────────────────────
+ct.addEventListener('scroll',function(){
+  btt.classList.toggle('vis',ct.scrollTop>300);
+});
+btt.addEventListener('click',()=>ct.scrollTo({top:0,behavior:'smooth'}));
+
+// ── Keyboard shortcuts ──────────────────────────────
+document.addEventListener('keydown',function(e){
+  if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&document.activeElement!==search){
+    e.preventDefault();search.focus();
+  }
+  if(e.key==='Escape'){if(document.activeElement===search)search.blur();if(modalBg.classList.contains('on'))modalBg.classList.remove('on');}
+});
+
+// ── Hash change ──────────────────────────────────────
+window.addEventListener('hashchange',function(){
+  const id=location.hash.slice(1);
+  if(id&&id!==curId)loadArticle(decodeURIComponent(id));
+});
+
+// ── Restore prefs ────────────────────────────────────
+try{
+  if(localStorage.getItem('theme')==='dark'){dark=true;document.body.classList.add('dark');thm.textContent='☀️'}
+  const sf=parseInt(localStorage.getItem('fs'));if(sf)setFs(sf);
+}catch(e){}
+
+// ── Share excerpt (书摘分享) ────────────────────────
+const shareBar=$('shareBar'),shareExcerpt=$('shareExcerpt');
+const shareOverlay=$('shareOverlay'),shareCard=$('shareCard');
+const scText=$('scText'),scTitle=$('scTitle');
+const saCopy=$('saCopy'),saSave=$('saSave'),saClose=$('saClose');
+let selectedText='';
+
+// Detect selection in .art-body and show share bar
+function showShareBarIfSelected(){
+  const sel=window.getSelection();
+  if(!sel||sel.isCollapsed||!sel.toString().trim()){
+    shareBar.classList.remove('vis');
+    return;
+  }
+  const anchor=sel.anchorNode;
+  if(!anchor)return;
+  const artBody=(anchor.nodeType===3?anchor.parentElement:anchor).closest('.art-body');
+  if(!artBody){shareBar.classList.remove('vis');return;}
+  const text=sel.toString().trim();
+  if(text.length<2){shareBar.classList.remove('vis');return;}
+  selectedText=text;
+  // Position bar below the selection (avoids fighting with system menu above)
+  const range=sel.getRangeAt(0);
+  const rect=range.getBoundingClientRect();
+  const barW=140;
+  let left=rect.left+rect.width/2;
+  let top=rect.bottom+10;
+  if(left<barW/2+8)left=barW/2+8;
+  if(left>window.innerWidth-barW/2-8)left=window.innerWidth-barW/2-8;
+  // If below viewport, put above
+  if(top+50>window.innerHeight)top=rect.top-48;
+  shareBar.style.left=left+'px';
+  shareBar.style.top=top+'px';
+  shareBar.classList.add('vis');
+}
+// Desktop: instant feedback via selectionchange
+document.addEventListener('selectionchange',showShareBarIfSelected);
+// Mobile: also check after touch ends (selection may finalize after a delay)
+document.addEventListener('touchend',function(){setTimeout(showShareBarIfSelected,300)});
+document.addEventListener('touchcancel',function(){setTimeout(showShareBarIfSelected,300)});
+
+// Hide share bar on scroll
+ct.addEventListener('scroll',()=>shareBar.classList.remove('vis'));
+
+// Theme switcher
+const shareThemes=$('shareThemes');
+let curTheme=localStorage.getItem('shareTheme')||'t-pure';
+shareCard.className='share-card '+curTheme;
+shareThemes.querySelector('[data-theme="'+curTheme+'"]')?.classList.add('active');
+shareThemes.addEventListener('click',function(e){
+  const btn=e.target.closest('[data-theme]');
+  if(!btn)return;
+  curTheme=btn.dataset.theme;
+  shareCard.className='share-card '+curTheme;
+  shareThemes.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  try{localStorage.setItem('shareTheme',curTheme)}catch(e){}
+});
+
+// Open share card
+shareExcerpt.addEventListener('click',function(e){
+  e.stopPropagation();
+  if(!selectedText)return;
+  let txt=selectedText;
+  if(txt.length>500)txt=txt.slice(0,497)+'...';
+  scText.textContent=txt;
+  const titleEl=document.querySelector('.art-hd h1');
+  scTitle.textContent=titleEl?titleEl.textContent:'未知文章';
+  shareOverlay.classList.add('on');
+  shareBar.classList.remove('vis');
+  window.getSelection().removeAllRanges();
+});
+
+// Close share overlay
+function closeShare(){shareOverlay.classList.remove('on')}
+saClose.addEventListener('click',closeShare);
+shareOverlay.addEventListener('click',function(e){if(e.target===shareOverlay)closeShare()});
+
+// Copy text
+saCopy.addEventListener('click',function(){
+  const titleEl=document.querySelector('.art-hd h1');
+  const title=titleEl?titleEl.textContent:'';
+  const copyStr=selectedText+'\n\n——'+title+'\n「知识库阅读器」';
+  navigator.clipboard.writeText(copyStr).then(()=>{
+    saCopy.textContent='✓ 已复制';
+    setTimeout(()=>{saCopy.textContent='📋 复制文字'},1500);
+  }).catch(()=>{
+    const ta=document.createElement('textarea');
+    ta.value=copyStr;
+    ta.style.cssText='position:fixed;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    saCopy.textContent='✓ 已复制';
+    setTimeout(()=>{saCopy.textContent='📋 复制文字'},1500);
+  });
+});
+
+// Save as image
+saSave.addEventListener('click',function(){
+  saSave.textContent='生成中...';
+  saSave.disabled=true;
+  html2canvas(shareCard,{
+    scale:3,
+    useCORS:true,
+    backgroundColor:null,
+    logging:false
+  }).then(function(canvas){
+    canvas.toBlob(function(blob){
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;
+      a.download='书摘_'+(scTitle.textContent||'excerpt').slice(0,20)+'.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      saSave.textContent='✓ 已保存';
+      setTimeout(()=>{saSave.textContent='💾 保存图片';saSave.disabled=false},1500);
+    },'image/png');
+  }).catch(function(err){
+    console.error('html2canvas error',err);
+    saSave.textContent='💾 保存图片';
+    saSave.disabled=false;
+    alert('图片生成失败');
+  });
+});
+
+// ── Start: check auth first ──────────────────────────
+checkAuth();
+
+}();
+</script>
+</body>
+</html>

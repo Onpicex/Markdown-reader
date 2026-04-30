@@ -1,0 +1,14 @@
+# Config with secrets
+config.json
+
+# Generated catalog
+dist/data/catalog.json
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+
+# Logs
+*.log

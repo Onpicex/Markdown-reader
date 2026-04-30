@@ -1,0 +1,6 @@
+{
+  "vault": "/path/to/your/obsidian/vault",
+  "port": 8765,
+  "bind": "0.0.0.0",
+  "password": "your-secure-password"
+}
