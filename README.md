@@ -153,6 +153,10 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 | 🌙 暗夜 | 深色渐变 + 紫色左边框 + 冷调配色 |
 | 🌿 清新绿 | 浅绿渐变 + 绿色边框 + 自然感 |
 
+选中文字后浮条提供两个操作：
+- 「🎧 从此处听」— 直接从选中位置开始 TTS 播放
+- 「📋 分享书摘」— 生成精美书摘卡片
+
 支持「📋 复制文字」（带出处）和「💾 保存图片」（html2canvas 3x 高清 PNG）。
 
 ## 性能优化
@@ -184,7 +188,8 @@ obsidian-reader/
 - 前端用 marked.js 实时渲染，零预编译
 - catalog.json 使用 ETag + `no-cache` 策略（浏览器先验证再决定是否下载），前端额外用 localStorage 做即时缓存
 - Obsidian embed 语法（`![[文件]]`）支持图片、音频、视频三种媒体类型
-- TTS 音频缓存在 `/tmp/obsidian-reader-tts/`，基于文章内容哈希命名，避免重复生成
+- TTS 音频缓存在 `/tmp/obsidian-reader-tts/`，基于文章内容哈希命名，缓存 7 天自动清理
+- TTS 音频服务支持 HTTP Range 请求（206 Partial Content），确保浏览器 seek 到任意位置
 - fs.watch 递归监听 vault 目录变更，2 秒防抖后自动 rescan + SSE 推送
 
 ## License

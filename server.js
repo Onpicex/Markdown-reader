@@ -193,7 +193,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /tts-cache/* → serve generated TTS audio
+  // /tts-cache/* → serve generated TTS audio (with Range support for seeking)
   if (pathname.startsWith('/tts-cache/')) {
     const rel = pathname.slice(11);
     const resolved = path.resolve(TTS_CACHE, rel);
@@ -201,7 +201,45 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
-    serveFile(res, resolved, 'max-age=3600');
+    // Range request support for audio seeking
+    try {
+      const stat = fs.statSync(resolved);
+      const mime = getMime(resolved);
+      const range = req.headers.range;
+      if (range) {
+        const m = range.match(/bytes=(\d+)-(\d*)/);
+        if (m) {
+          const start = parseInt(m[1]);
+          const end = m[2] ? parseInt(m[2]) : stat.size - 1;
+          if (start >= stat.size) {
+            res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
+            res.end();
+            return;
+          }
+          const chunkSize = end - start + 1;
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunkSize,
+            'Content-Type': mime,
+            'Cache-Control': 'max-age=604800',
+          });
+          fs.createReadStream(resolved, { start, end }).pipe(res);
+          return;
+        }
+      }
+      // No Range header — serve full file with Accept-Ranges
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': stat.size,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'max-age=604800',
+      });
+      fs.createReadStream(resolved).pipe(res);
+    } catch (e) {
+      if (e.code === 'ENOENT') { res.writeHead(404); res.end('Not found'); }
+      else { res.writeHead(500); res.end('Read error'); }
+    }
     return;
   }
 
@@ -441,6 +479,29 @@ function startWatching(vaultPath) {
   }
 }
 
+// ── TTS cache cleanup: remove files older than 7 days ──
+function cleanTTSCache() {
+  try {
+    if (!fs.existsSync(TTS_CACHE)) return;
+    const now = Date.now();
+    const maxAge = 7 * 24 * 60 * 60 * 1000;
+    let cleaned = 0;
+    for (const f of fs.readdirSync(TTS_CACHE)) {
+      const fp = path.join(TTS_CACHE, f);
+      try {
+        const st = fs.statSync(fp);
+        if (st.isFile() && (now - st.mtimeMs) > maxAge) {
+          fs.unlinkSync(fp);
+          cleaned++;
+        }
+      } catch {}
+    }
+    if (cleaned) console.log(`[tts-cache] cleaned ${cleaned} expired files (>7d)`);
+  } catch (e) {
+    console.error('[tts-cache] cleanup error:', e.message);
+  }
+}
+
 const PORT = config.port || 8765;
 const BIND = config.bind || '0.0.0.0';
 server.listen(PORT, BIND, () => {
@@ -450,6 +511,8 @@ server.listen(PORT, BIND, () => {
   console.log(`   Auth: ${config.password ? 'enabled' : 'disabled'}`);
   // Start watching vault
   startWatching(config.vault);
+  // Clean expired TTS cache on startup
+  cleanTTSCache();
   // Initial rescan on startup (serve.sh scan may fail if iCloud not ready)
   setTimeout(() => doRescan('startup'), 3000);
 });

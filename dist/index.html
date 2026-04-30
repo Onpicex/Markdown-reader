@@ -410,6 +410,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 
 <!-- Share excerpt bar (appears on text selection) -->
 <div class="share-bar" id="shareBar">
+  <button id="shareTtsPlay">🎧 从此处听</button>
   <button id="shareExcerpt">📋 分享书摘</button>
 </div>
 
@@ -991,7 +992,11 @@ const saCopy=$('saCopy'),saSave=$('saSave'),saClose=$('saClose');
 let selectedText='';
 
 // Detect selection in .art-body and show share bar
+let _shareDebounce=null;
+let _touchActive=false;
+let _shareBarLock=false; // prevent hiding while user interacts with share bar buttons
 function showShareBarIfSelected(){
+  if(_shareBarLock)return; // don't hide while clicking share bar buttons
   const sel=window.getSelection();
   if(!sel||sel.isCollapsed||!sel.toString().trim()){
     shareBar.classList.remove('vis');
@@ -1007,7 +1012,7 @@ function showShareBarIfSelected(){
   // Position bar below the selection (avoids fighting with system menu above)
   const range=sel.getRangeAt(0);
   const rect=range.getBoundingClientRect();
-  const barW=140;
+  const barW=200;
   let left=rect.left+rect.width/2;
   let top=rect.bottom+10;
   if(left<barW/2+8)left=barW/2+8;
@@ -1018,11 +1023,26 @@ function showShareBarIfSelected(){
   shareBar.style.top=top+'px';
   shareBar.classList.add('vis');
 }
-// Desktop: instant feedback via selectionchange
-document.addEventListener('selectionchange',showShareBarIfSelected);
-// Mobile: also check after touch ends (selection may finalize after a delay)
-document.addEventListener('touchend',function(){setTimeout(showShareBarIfSelected,300)});
-document.addEventListener('touchcancel',function(){setTimeout(showShareBarIfSelected,300)});
+function debouncedShowShareBar(){
+  clearTimeout(_shareDebounce);
+  _shareDebounce=setTimeout(showShareBarIfSelected,350);
+}
+// Desktop: instant feedback via selectionchange (skip on touch devices during touch)
+document.addEventListener('selectionchange',function(){
+  if(_touchActive)return; // ignore during touch — wait for touchend
+  showShareBarIfSelected();
+});
+// Mobile: debounce after touch ends to let the selection finalize
+document.addEventListener('touchstart',function(){_touchActive=true;},{passive:true});
+document.addEventListener('touchend',function(){
+  // Delay clearing _touchActive so selectionchange events during touch release are still ignored
+  setTimeout(()=>{_touchActive=false;},500);
+  debouncedShowShareBar();
+},{passive:true});
+document.addEventListener('touchcancel',function(){
+  setTimeout(()=>{_touchActive=false;},500);
+  debouncedShowShareBar();
+},{passive:true});
 
 // Hide share bar on scroll
 ct.addEventListener('scroll',()=>shareBar.classList.remove('vis'));
@@ -1042,9 +1062,26 @@ shareThemes.addEventListener('click',function(e){
   try{localStorage.setItem('shareTheme',curTheme)}catch(e){}
 });
 
+// Play TTS from selected text
+const shareTtsPlay=$('shareTtsPlay');
+// Lock share bar on mousedown/touchstart so selectionchange doesn't hide it before click fires
+shareBar.addEventListener('mousedown',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);});
+shareBar.addEventListener('touchstart',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);},{passive:true});
+shareTtsPlay.addEventListener('click',function(e){
+  e.stopPropagation();
+  _shareBarLock=false;
+  const text=selectedText; // capture before clearing
+  if(!text){console.log('[tts] shareTtsPlay: no selectedText');return;}
+  console.log('[tts] shareTtsPlay clicked, text:',text.slice(0,30));
+  shareBar.classList.remove('vis');
+  window.getSelection().removeAllRanges();
+  TTS.playFromText(text);
+});
+
 // Open share card
 shareExcerpt.addEventListener('click',function(e){
   e.stopPropagation();
+  _shareBarLock=false;
   if(!selectedText)return;
   let txt=selectedText;
   if(txt.length>500)txt=txt.slice(0,497)+'...';
@@ -1136,6 +1173,64 @@ const TTS={
     const body=document.querySelector('.art-body');
     if(!body)return '';
     return body.innerText.trim();
+  },
+
+  // Find the segment index that contains the given text (or closest match)
+  findSegmentByText(searchText){
+    if(!this.segments.length)return -1;
+    const norm=s=>s.replace(/[\s\u3000]/g,'').toLowerCase();
+    const needle=norm(searchText).slice(0,50); // use first 50 chars for matching
+    if(!needle)return -1;
+    // Try exact substring match first
+    for(let i=0;i<this.segments.length;i++){
+      if(norm(this.segments[i].text).includes(needle))return i;
+    }
+    // Fallback: find best overlap
+    let bestIdx=0,bestScore=0;
+    for(let i=0;i<this.segments.length;i++){
+      const segNorm=norm(this.segments[i].text);
+      // Count matching chars from needle start
+      let score=0;
+      for(let j=0;j<needle.length&&j<segNorm.length;j++){
+        if(segNorm.includes(needle.slice(0,j+1)))score=j+1;
+        else break;
+      }
+      if(score>bestScore){bestScore=score;bestIdx=i;}
+    }
+    return bestIdx;
+  },
+
+  // Play from a specific segment (by selected text)
+  async playFromText(searchText){
+    console.log('[tts] playFromText called, text:', searchText.slice(0,30));
+    // Show TTS bar if not visible
+    if(!this.barVisible){
+      this.barVisible=true;
+      ttsBar.classList.add('on');
+      ttsToggle.classList.add('active');
+    }
+    // If audio already loaded and segments mapped, seek directly
+    if(this.audio&&this.audio.src&&this._segTimeRanges&&this._segTimeRanges.length){
+      // Rebuild segments if empty (can happen after DOM re-render)
+      if(!this.segments.length) this.buildSegments();
+      const sIdx=this.findSegmentByText(searchText);
+      console.log('[tts] direct seek: segIdx=',sIdx,'segTimeRanges.length=',this._segTimeRanges.length);
+      if(sIdx>=0&&this._segTimeRanges[sIdx]){
+        const seekTime=this._segTimeRanges[sIdx].start;
+        console.log('[tts] seeking to',seekTime,'s for segment',sIdx);
+        this.audio.currentTime=seekTime;
+        this.audio.playbackRate=this.speed;
+        this.playing=true;
+        this.paused=false;
+        this.audio.play();
+        this.updateUI();
+        return;
+      }
+    }
+    // Need to generate first, then seek after generation
+    console.log('[tts] no audio loaded, will generate then seek');
+    this._pendingSeekText=searchText;
+    await this.play();
   },
 
   // Build DOM segments for highlight mapping
@@ -1269,9 +1364,23 @@ const TTS={
       this.updateUI();
       return;
     }
-    // If audio already loaded, replay
+    // If audio already loaded, replay (or seek if _pendingSeekText)
     if(this.audio&&this.audio.src){
-      this.audio.currentTime=0;
+      if(this._pendingSeekText){
+        const seekText=this._pendingSeekText;
+        this._pendingSeekText=null;
+        if(!this.segments.length) this.buildSegments();
+        const sIdx=this.findSegmentByText(seekText);
+        console.log('[tts] play() cached path: pendingSeek segIdx=',sIdx,'segTimeRanges=',this._segTimeRanges?.length);
+        if(sIdx>=0&&this._segTimeRanges&&this._segTimeRanges[sIdx]){
+          this.audio.currentTime=this._segTimeRanges[sIdx].start;
+          console.log('[tts] play() seeking to',this._segTimeRanges[sIdx].start);
+        }else{
+          this.audio.currentTime=0;
+        }
+      }else{
+        this.audio.currentTime=0;
+      }
       this.audio.playbackRate=this.speed;
       this.audio.play();
       this.playing=true;
@@ -1319,9 +1428,42 @@ const TTS={
         this.curCueIdx=-1;
         this.updateUI();
       });
-      this.audio.play();
       this.playing=true;
       this.paused=false;
+      // If there's a pending seek (from "play from here"), play first then seek once playable
+      if(this._pendingSeekText){
+        const seekText=this._pendingSeekText;
+        this._pendingSeekText=null;
+        if(!this.segments.length) this.buildSegments();
+        const sIdx=this.findSegmentByText(seekText);
+        const seekTime=(sIdx>=0&&this._segTimeRanges&&this._segTimeRanges[sIdx])?this._segTimeRanges[sIdx].start:0;
+        console.log('[tts] play() fresh gen: pendingSeek segIdx=',sIdx,'seekTime=',seekTime);
+        // Start playback, then seek once metadata is loaded
+        const aud=this.audio;
+        const doSeek=()=>{
+          console.log('[tts] doSeek: seeking to',seekTime,'readyState=',aud.readyState,'duration=',aud.duration);
+          aud.currentTime=seekTime;
+          // Verify seek took effect
+          const verifyCb=()=>{
+            console.log('[tts] seeked event: currentTime=',aud.currentTime);
+          };
+          aud.addEventListener('seeked',verifyCb,{once:true});
+        };
+        // loadedmetadata means duration is known and seeking is possible
+        if(aud.readyState>=1){
+          doSeek();
+          aud.play();
+        }else{
+          aud.addEventListener('loadedmetadata',function(){
+            doSeek();
+            aud.play();
+          },{once:true});
+          // Trigger loading
+          aud.load();
+        }
+      }else{
+        this.audio.play();
+      }
     }catch(e){
       const msg=(e&&e.message)?e.message:String(e);
       console.error('TTS error:',e);
