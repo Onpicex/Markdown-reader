@@ -1129,41 +1129,64 @@ const TTS={
     }
   },
 
-  // Map each VTT cue to the best matching DOM segment
-  // Strategy: build full-text char ranges per segment, then map cue text positions
+  // Build segment time ranges by aligning VTT cue text to DOM segment text
+  // Each cue has precise timestamps from edge-tts. We assign each cue to a segment,
+  // then derive each segment's time range from its first/last cue.
   buildSegMap(){
     this.segMap=[];
+    this._segTimeRanges=[];
     if(!this.cues.length||!this.segments.length){return;}
-    // Build full text from segments with char offset ranges
-    const ranges=[]; // [{start,end,idx}]
-    let fullText='';
+    // Normalize text for comparison: lowercase, remove whitespace and common punctuation
+    const norm=s=>s.replace(/[\s\u3000.,;:!?\-\u2026\u201c\u201d\u2018\u2019\uff0c\u3002\uff01\uff1f\u3001\uff1b\uff1a\u300a\u300b\u3010\u3011()\[\]]/g,'').toLowerCase();
+    // Build normalized segment texts and track char offset ranges
+    const segNorms=[];
+    let segFullNorm='';
+    const segRanges=[]; // [{start, end}] in segFullNorm
     for(let i=0;i<this.segments.length;i++){
-      const t=this.segments[i].text;
-      const start=fullText.length;
-      fullText+=t+'\n';
-      ranges.push({start, end:fullText.length, idx:i});
+      const n=norm(this.segments[i].text);
+      segNorms.push(n);
+      segRanges.push({start:segFullNorm.length, end:segFullNorm.length+n.length});
+      segFullNorm+=n;
     }
-    // Also build full text from cues for progressive matching
-    let cueFullText='';
-    const cueOffsets=[];
-    for(const c of this.cues){
-      cueOffsets.push(cueFullText.length);
-      cueFullText+=c.text;
-    }
-    // Map ratio: each cue's position in cue-full-text → proportional position in segment-full-text
-    const cueTotal=cueFullText.length||1;
-    const segTotal=fullText.length||1;
+    // For each cue, find which segment it belongs to by scanning through
+    // the concatenated normalized segment text
+    let cursor=0; // current position in segFullNorm
     for(let i=0;i<this.cues.length;i++){
-      const ratio=cueOffsets[i]/cueTotal;
-      const charPos=Math.floor(ratio*segTotal);
-      // Find which segment range contains this charPos
-      let sIdx=0;
-      for(let j=0;j<ranges.length;j++){
-        if(charPos>=ranges[j].start&&charPos<ranges[j].end){sIdx=j;break;}
-        if(j===ranges.length-1)sIdx=j;
+      const cueNorm=norm(this.cues[i].text);
+      if(!cueNorm){this.segMap.push(this.segMap.length?this.segMap[this.segMap.length-1]:0);continue;}
+      // Find cueNorm in segFullNorm starting from cursor
+      let pos=segFullNorm.indexOf(cueNorm,cursor);
+      if(pos<0)pos=segFullNorm.indexOf(cueNorm); // retry from start
+      if(pos>=0)cursor=pos+cueNorm.length;
+      // Which segment does pos fall into?
+      let sIdx=this.segMap.length?this.segMap[this.segMap.length-1]:0;
+      if(pos>=0){
+        for(let j=0;j<segRanges.length;j++){
+          if(pos<segRanges[j].end){sIdx=j;break;}
+        }
       }
       this.segMap.push(sIdx);
     }
+    // Now derive time ranges per segment from assigned cues
+    // segMap[cueIdx] = segIdx, cues[cueIdx].start/end = time
+    const segTimes=new Array(this.segments.length).fill(null);
+    for(let i=0;i<this.segMap.length;i++){
+      const si=this.segMap[i];
+      if(!segTimes[si])segTimes[si]={start:this.cues[i].start, end:this.cues[i].end};
+      else{
+        segTimes[si].start=Math.min(segTimes[si].start,this.cues[i].start);
+        segTimes[si].end=Math.max(segTimes[si].end,this.cues[i].end);
+      }
+    }
+    // Fill gaps: segments with no cues inherit from neighbors
+    for(let i=0;i<segTimes.length;i++){
+      if(!segTimes[i]){
+        const prev=i>0&&segTimes[i-1]?segTimes[i-1].end:0;
+        const next=segTimes.find((s,j)=>j>i&&s);
+        segTimes[i]={start:prev, end:next?next.start:prev+0.1};
+      }
+    }
+    this._segTimeRanges=segTimes;
   },
 
   // Parse WebVTT content
@@ -1302,35 +1325,23 @@ const TTS={
   },
 
   onTimeUpdate(){
-    if(!this.audio||!this.segments.length)return;
+    if(!this.audio||!this.segments.length||!this._segTimeRanges||!this._segTimeRanges.length)return;
     const t=this.audio.currentTime;
     const dur=this.audio.duration||1;
     // Update progress bar
     ttsProgressFill.style.width=((t/dur)*100)+'%';
     // Update time display
     ttsInfo.textContent=this.formatTime(t)+' / '+this.formatTime(dur);
-    // Direct time→segment mapping via character-weighted ranges
-    // Each segment's time share is proportional to its text length
-    if(!this._segTimeRanges||this._segTimeRangesDur!==dur){
-      // Build time ranges once (or when duration changes)
-      let totalChars=0;
-      for(const s of this.segments)totalChars+=s.text.length;
-      if(totalChars===0)return;
-      this._segTimeRanges=[];
-      let cumTime=0;
-      for(let i=0;i<this.segments.length;i++){
-        const segDur=(this.segments[i].text.length/totalChars)*dur;
-        this._segTimeRanges.push({start:cumTime, end:cumTime+segDur});
-        cumTime+=segDur;
-      }
-      this._segTimeRangesDur=dur;
-    }
-    // Find which segment the current time falls into
+    // Find which segment the current time falls into (using VTT-derived ranges)
     let sIdx=-1;
     for(let i=0;i<this._segTimeRanges.length;i++){
       if(t>=this._segTimeRanges[i].start&&t<this._segTimeRanges[i].end){sIdx=i;break;}
     }
-    if(sIdx<0&&t>=dur*0.99)sIdx=this.segments.length-1; // end of audio
+    // Fallback: if past all ranges, highlight last segment
+    if(sIdx<0&&this._segTimeRanges.length>0){
+      const last=this._segTimeRanges[this._segTimeRanges.length-1];
+      if(t>=last.start)sIdx=this._segTimeRanges.length-1;
+    }
     if(sIdx>=0&&sIdx!==this.curCueIdx){
       this.curCueIdx=sIdx;
       this.highlightSegment(this.segments[sIdx]);
