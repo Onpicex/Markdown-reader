@@ -1309,13 +1309,21 @@ const TTS={
     ttsProgressFill.style.width=((t/dur)*100)+'%';
     // Update time display
     ttsInfo.textContent=this.formatTime(t)+' / '+this.formatTime(dur);
-    // Find current cue
+    // Look ahead: shift time forward to pre-highlight before audio reaches the cue
+    const lookAhead=t+0.3;
+    // Find current cue (using look-ahead time for highlight, real time for fallback)
     let cIdx=-1;
     for(let i=0;i<this.cues.length;i++){
-      if(t>=this.cues[i].start&&t<this.cues[i].end){cIdx=i;break;}
+      if(lookAhead>=this.cues[i].start&&lookAhead<this.cues[i].end){cIdx=i;break;}
     }
     if(cIdx<0){
-      // Between cues — find the last cue that started before current time
+      // Between cues — find the next cue that's about to start
+      for(let i=0;i<this.cues.length;i++){
+        if(lookAhead>=this.cues[i].start&&t<this.cues[i].end){cIdx=i;break;}
+      }
+    }
+    if(cIdx<0){
+      // Still nothing — fall back to last cue that started before now
       for(let i=this.cues.length-1;i>=0;i--){
         if(t>=this.cues[i].start){cIdx=i;break;}
       }
