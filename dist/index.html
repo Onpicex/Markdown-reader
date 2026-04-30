@@ -1174,7 +1174,7 @@ const TTS={
     while(i<lines.length&&!lines[i].includes('-->')){i++;}
     while(i<lines.length){
       const line=lines[i];
-      const m=line.match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+      const m=line.match(/(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})/);
       if(m){
         const start=this.parseTime(m[1]);
         const end=this.parseTime(m[2]);
@@ -1193,7 +1193,7 @@ const TTS={
   },
 
   parseTime(s){
-    const p=s.split(':');
+    const p=s.replace(',','.').split(':');
     const sec=parseFloat(p[2]);
     return parseInt(p[0])*3600+parseInt(p[1])*60+sec;
   },
