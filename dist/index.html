@@ -1302,41 +1302,38 @@ const TTS={
   },
 
   onTimeUpdate(){
-    if(!this.audio||!this.cues.length)return;
+    if(!this.audio||!this.segments.length)return;
     const t=this.audio.currentTime;
     const dur=this.audio.duration||1;
     // Update progress bar
     ttsProgressFill.style.width=((t/dur)*100)+'%';
     // Update time display
     ttsInfo.textContent=this.formatTime(t)+' / '+this.formatTime(dur);
-    // Look ahead: shift time forward to pre-highlight before audio reaches the cue
-    const lookAhead=t+0.3;
-    // Find current cue (using look-ahead time for highlight, real time for fallback)
-    let cIdx=-1;
-    for(let i=0;i<this.cues.length;i++){
-      if(lookAhead>=this.cues[i].start&&lookAhead<this.cues[i].end){cIdx=i;break;}
-    }
-    if(cIdx<0){
-      // Between cues — find the next cue that's about to start
-      for(let i=0;i<this.cues.length;i++){
-        if(lookAhead>=this.cues[i].start&&t<this.cues[i].end){cIdx=i;break;}
+    // Direct time→segment mapping via character-weighted ranges
+    // Each segment's time share is proportional to its text length
+    if(!this._segTimeRanges||this._segTimeRangesDur!==dur){
+      // Build time ranges once (or when duration changes)
+      let totalChars=0;
+      for(const s of this.segments)totalChars+=s.text.length;
+      if(totalChars===0)return;
+      this._segTimeRanges=[];
+      let cumTime=0;
+      for(let i=0;i<this.segments.length;i++){
+        const segDur=(this.segments[i].text.length/totalChars)*dur;
+        this._segTimeRanges.push({start:cumTime, end:cumTime+segDur});
+        cumTime+=segDur;
       }
+      this._segTimeRangesDur=dur;
     }
-    if(cIdx<0){
-      // Still nothing — fall back to last cue that started before now
-      for(let i=this.cues.length-1;i>=0;i--){
-        if(t>=this.cues[i].start){cIdx=i;break;}
-      }
+    // Find which segment the current time falls into
+    let sIdx=-1;
+    for(let i=0;i<this._segTimeRanges.length;i++){
+      if(t>=this._segTimeRanges[i].start&&t<this._segTimeRanges[i].end){sIdx=i;break;}
     }
-    if(cIdx>=0&&cIdx!==this.curCueIdx){
-      this.curCueIdx=cIdx;
-      // Highlight corresponding segment
-      if(this.segMap.length>cIdx){
-        const sIdx=this.segMap[cIdx];
-        if(sIdx>=0&&sIdx<this.segments.length){
-          this.highlightSegment(this.segments[sIdx]);
-        }
-      }
+    if(sIdx<0&&t>=dur*0.99)sIdx=this.segments.length-1; // end of audio
+    if(sIdx>=0&&sIdx!==this.curCueIdx){
+      this.curCueIdx=sIdx;
+      this.highlightSegment(this.segments[sIdx]);
     }
   },
 
