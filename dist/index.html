@@ -1130,25 +1130,39 @@ const TTS={
   },
 
   // Map each VTT cue to the best matching DOM segment
+  // Strategy: build full-text char ranges per segment, then map cue text positions
   buildSegMap(){
     this.segMap=[];
     if(!this.cues.length||!this.segments.length){return;}
-    let segIdx=0;
-    let segCharPos=0; // how many cue chars we've consumed in current segment
-    const segTexts=this.segments.map(s=>s.text);
+    // Build full text from segments with char offset ranges
+    const ranges=[]; // [{start,end,idx}]
+    let fullText='';
+    for(let i=0;i<this.segments.length;i++){
+      const t=this.segments[i].text;
+      const start=fullText.length;
+      fullText+=t+'\n';
+      ranges.push({start, end:fullText.length, idx:i});
+    }
+    // Also build full text from cues for progressive matching
+    let cueFullText='';
+    const cueOffsets=[];
+    for(const c of this.cues){
+      cueOffsets.push(cueFullText.length);
+      cueFullText+=c.text;
+    }
+    // Map ratio: each cue's position in cue-full-text → proportional position in segment-full-text
+    const cueTotal=cueFullText.length||1;
+    const segTotal=fullText.length||1;
     for(let i=0;i<this.cues.length;i++){
-      // Find which segment contains this cue's text
-      const cueTxt=this.cues[i].text;
-      let bestSeg=segIdx;
-      // Search forward from current position
-      for(let j=segIdx;j<this.segments.length;j++){
-        if(segTexts[j].includes(cueTxt)){bestSeg=j;break;}
-        // Also try partial match (cue may be a word fragment)
-        if(j===segIdx)continue;
-        if(segTexts[j].length>0){bestSeg=j;break;}
+      const ratio=cueOffsets[i]/cueTotal;
+      const charPos=Math.floor(ratio*segTotal);
+      // Find which segment range contains this charPos
+      let sIdx=0;
+      for(let j=0;j<ranges.length;j++){
+        if(charPos>=ranges[j].start&&charPos<ranges[j].end){sIdx=j;break;}
+        if(j===ranges.length-1)sIdx=j;
       }
-      this.segMap.push(bestSeg);
-      segIdx=bestSeg;
+      this.segMap.push(sIdx);
     }
   },
 
