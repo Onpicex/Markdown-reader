@@ -21,6 +21,8 @@ const DIR = __dirname;
 const DIST = path.join(DIR, 'dist');
 const CONFIG_PATH = path.join(DIR, 'config.json');
 const PYTHON = '/usr/bin/python3';
+const TTS_CACHE = '/tmp/obsidian-reader-tts';
+const TTS_VOICE = 'zh-CN-XiaoxiaoNeural';
 
 // ── Load config ──────────────────────────────────────
 function loadConfig() {
@@ -151,6 +153,8 @@ const server = http.createServer(async (req, res) => {
   // But protect /vault/*, /data/*, /api/rescan, /api/config
   const isProtectedPath = pathname.startsWith('/vault/') ||
     pathname.startsWith('/data/') ||
+    pathname.startsWith('/tts-cache/') ||
+    pathname === '/api/tts' ||
     pathname === '/api/rescan' ||
     pathname === '/api/config' ||
     pathname === '/api/password';
@@ -171,6 +175,76 @@ const server = http.createServer(async (req, res) => {
     res.write('data: connected\n\n');
     sseClients.add(res);
     req.on('close', () => sseClients.delete(res));
+    return;
+  }
+
+  // /tts-cache/* → serve generated TTS audio
+  if (pathname.startsWith('/tts-cache/')) {
+    const rel = pathname.slice(11);
+    const resolved = path.resolve(TTS_CACHE, rel);
+    if (!resolved.startsWith(path.resolve(TTS_CACHE))) {
+      res.writeHead(403); res.end('Forbidden');
+      return;
+    }
+    serveFile(res, resolved, 'max-age=3600');
+    return;
+  }
+
+  // /api/tts — generate TTS audio for article
+  if (pathname === '/api/tts' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const { text, id, voice } = JSON.parse(body);
+      if (!text || !id) {
+        jsonReply(res, 400, { ok: false, error: 'Missing text or id' });
+        return;
+      }
+      // Hash the text content for cache key
+      const hash = crypto.createHash('md5').update(text).digest('hex').slice(0, 12);
+      const safeId = id.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 60);
+      const baseName = `${safeId}_${hash}`;
+      const mp3Path = path.join(TTS_CACHE, baseName + '.mp3');
+      const vttPath = path.join(TTS_CACHE, baseName + '.vtt');
+
+      // Check cache
+      if (fs.existsSync(mp3Path) && fs.existsSync(vttPath)) {
+        jsonReply(res, 200, {
+          ok: true,
+          audio: '/tts-cache/' + baseName + '.mp3',
+          subtitle: '/tts-cache/' + baseName + '.vtt',
+          cached: true
+        });
+        return;
+      }
+
+      // Ensure cache dir
+      fs.mkdirSync(TTS_CACHE, { recursive: true });
+
+      // Generate with edge-tts
+      const useVoice = voice || TTS_VOICE;
+      const { execFile: ef } = require('child_process');
+      ef(PYTHON, [
+        '-m', 'edge_tts',
+        '--voice', useVoice,
+        '--text', text,
+        '--write-media', mp3Path,
+        '--write-subtitles', vttPath
+      ], { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          console.error('[tts] generation failed:', stderr || err.message);
+          jsonReply(res, 500, { ok: false, error: 'TTS generation failed', detail: (stderr || '').slice(-300) });
+          return;
+        }
+        jsonReply(res, 200, {
+          ok: true,
+          audio: '/tts-cache/' + baseName + '.mp3',
+          subtitle: '/tts-cache/' + baseName + '.vtt',
+          cached: false
+        });
+      });
+    } catch (e) {
+      jsonReply(res, 400, { ok: false, error: 'Bad request' });
+    }
     return;
   }
 

@@ -165,6 +165,20 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:90}
 .ov.on{display:block}
 
+/* ── TTS 听书 ────────────────────────────────────── */
+.tts-bar{display:none;align-items:center;gap:8px;padding:6px 14px;background:var(--bg);border-top:1px solid var(--border);flex-shrink:0;transition:background var(--tr)}
+.tts-bar.on{display:flex}
+.tts-btn{background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:13px;color:var(--text-2);cursor:pointer;font-family:var(--font);transition:all var(--tr);white-space:nowrap;display:flex;align-items:center;gap:4px}
+.tts-btn:hover{border-color:var(--gold-light);color:var(--text)}
+.tts-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-faint)}
+.tts-speed{font-size:12px;color:var(--text-3);cursor:pointer;padding:2px 6px;border-radius:4px;user-select:none}
+.tts-speed:hover{color:var(--text);background:var(--gold-faint)}
+.tts-progress{flex:1;height:3px;background:var(--border);border-radius:2px;cursor:pointer;position:relative;min-width:60px}
+.tts-progress-fill{height:100%;background:var(--gold);border-radius:2px;transition:width .3s;width:0}
+.tts-info{font-size:11px;color:var(--text-3);white-space:nowrap}
+.tts-highlight{background:rgba(212,169,66,.18);border-radius:3px;transition:background .2s}
+.dark .tts-highlight{background:rgba(212,169,66,.15)}
+
 /* Back to top */
 .btt{position:fixed;bottom:24px;right:24px;width:38px;height:38px;border-radius:50%;background:var(--gold);color:#fff;border:none;font-size:16px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;z-index:50;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12)}
 .btt.vis{opacity:1;transform:translateY(0)}
@@ -364,11 +378,19 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
     <div class="toolbar">
       <div class="tb-l"><button class="ham" id="ham">☰</button><span class="bc" id="bc"></span></div>
       <div class="tb-r">
+        <button class="tb-btn" id="ttsToggle" title="听书">🎧</button>
         <button class="tb-btn" id="fdec">A-</button>
         <button class="tb-btn" id="frst" title="重置字体">A</button>
         <button class="tb-btn" id="finc">A+</button>
         <button class="tb-btn" id="thm">🌙</button>
       </div>
+    </div>
+    <div class="tts-bar" id="ttsBar">
+      <button class="tts-btn" id="ttsPlay" title="播放/暂停">▶ 播放</button>
+      <button class="tts-btn" id="ttsStop" title="停止">⏹</button>
+      <div class="tts-progress" id="ttsProgress"><div class="tts-progress-fill" id="ttsProgressFill"></div></div>
+      <span class="tts-info" id="ttsInfo"></span>
+      <span class="tts-speed" id="ttsSpeed" title="语速">1.0x</span>
     </div>
     <div class="content" id="ct">
       <div class="welcome" id="wc">
@@ -733,6 +755,7 @@ function artItem(a,sub,readSet){
 
 // ── Load article (fetch raw markdown, render in browser) ─
 async function loadArticle(id){
+  if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];}
   ct.innerHTML='<div class="ld"><div class="sp"></div><div>加载中...</div></div>';
   try{
     const r=await fetch('/vault/'+encodeURI(id),{cache:'no-store'});
@@ -1062,6 +1085,295 @@ saSave.addEventListener('click',function(){
     saSave.disabled=false;
     alert('图片生成失败');
   });
+});
+
+// ── TTS 听书（Edge TTS）─────────────────────────────────
+const ttsToggle=$('ttsToggle'),ttsBar=$('ttsBar');
+const ttsPlay=$('ttsPlay'),ttsStop=$('ttsStop');
+const ttsProgress=$('ttsProgress'),ttsProgressFill=$('ttsProgressFill');
+const ttsInfo=$('ttsInfo'),ttsSpeedBtn=$('ttsSpeed');
+
+const TTS={
+  audio: null,
+  cues: [],           // {start, end, text} from WebVTT
+  segments: [],       // {el, text} DOM segments for highlight
+  segMap: [],         // cue index → segment index mapping
+  playing: false,
+  paused: false,
+  speed: 1.0,
+  speeds: [0.8, 1.0, 1.2, 1.5, 2.0],
+  barVisible: false,
+  generating: false,
+  curCueIdx: -1,
+
+  // Extract plain text from article body for TTS
+  getArticleText(){
+    const body=document.querySelector('.art-body');
+    if(!body)return '';
+    return body.innerText.trim();
+  },
+
+  // Build DOM segments for highlight mapping
+  buildSegments(){
+    this.segments=[];
+    const body=document.querySelector('.art-body');
+    if(!body)return;
+    const blocks=body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote > p, td, th');
+    const seen=new Set();
+    for(const el of blocks){
+      if(seen.has(el))continue;
+      seen.add(el);
+      const text=el.innerText.trim();
+      if(text.length<1)continue;
+      this.segments.push({el, text});
+    }
+  },
+
+  // Map each VTT cue to the best matching DOM segment
+  buildSegMap(){
+    this.segMap=[];
+    if(!this.cues.length||!this.segments.length){return;}
+    let segIdx=0;
+    let segCharPos=0; // how many cue chars we've consumed in current segment
+    const segTexts=this.segments.map(s=>s.text);
+    for(let i=0;i<this.cues.length;i++){
+      // Find which segment contains this cue's text
+      const cueTxt=this.cues[i].text;
+      let bestSeg=segIdx;
+      // Search forward from current position
+      for(let j=segIdx;j<this.segments.length;j++){
+        if(segTexts[j].includes(cueTxt)){bestSeg=j;break;}
+        // Also try partial match (cue may be a word fragment)
+        if(j===segIdx)continue;
+        if(segTexts[j].length>0){bestSeg=j;break;}
+      }
+      this.segMap.push(bestSeg);
+      segIdx=bestSeg;
+    }
+  },
+
+  // Parse WebVTT content
+  parseVTT(vttText){
+    const cues=[];
+    const lines=vttText.split('\n');
+    let i=0;
+    while(i<lines.length&&!lines[i].includes('-->')){i++;}
+    while(i<lines.length){
+      const line=lines[i];
+      const m=line.match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+      if(m){
+        const start=this.parseTime(m[1]);
+        const end=this.parseTime(m[2]);
+        i++;
+        let text='';
+        while(i<lines.length&&lines[i].trim()!==''){
+          text+=(text?' ':'')+lines[i].trim();
+          i++;
+        }
+        if(text)cues.push({start,end,text});
+      }else{
+        i++;
+      }
+    }
+    return cues;
+  },
+
+  parseTime(s){
+    const p=s.split(':');
+    const sec=parseFloat(p[2]);
+    return parseInt(p[0])*3600+parseInt(p[1])*60+sec;
+  },
+
+  formatTime(sec){
+    const m=Math.floor(sec/60);
+    const s=Math.floor(sec%60);
+    return m+':'+(s<10?'0':'')+s;
+  },
+
+  toggleBar(){
+    if(!document.querySelector('.art-body'))return;
+    this.barVisible=!this.barVisible;
+    ttsBar.classList.toggle('on',this.barVisible);
+    ttsToggle.classList.toggle('active',this.barVisible);
+    if(!this.barVisible)this.stop();
+  },
+
+  async play(){
+    // Resume from pause
+    if(this.paused&&this.audio){
+      this.audio.play();
+      this.paused=false;
+      this.playing=true;
+      this.updateUI();
+      return;
+    }
+    // If audio already loaded, replay
+    if(this.audio&&this.audio.src){
+      this.audio.currentTime=0;
+      this.audio.playbackRate=this.speed;
+      this.audio.play();
+      this.playing=true;
+      this.paused=false;
+      this.updateUI();
+      return;
+    }
+    // Generate TTS
+    const text=this.getArticleText();
+    if(!text)return;
+    this.generating=true;
+    ttsPlay.innerHTML='⏳ 生成中...';
+    ttsPlay.disabled=true;
+    try{
+      const r=await fetch('/api/tts',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({text, id:curId||'unknown'})
+      });
+      const d=await r.json();
+      if(!d.ok){
+        alert('TTS 生成失败: '+(d.error||''));
+        return;
+      }
+      // Load subtitle
+      const vttR=await fetch(d.subtitle,{cache:'no-store'});
+      const vttText=await vttR.text();
+      this.cues=this.parseVTT(vttText);
+      this.buildSegments();
+      this.buildSegMap();
+      // Create audio
+      if(this.audio){this.audio.pause();this.audio.removeAttribute('src');}
+      this.audio=new Audio(d.audio);
+      this.audio.playbackRate=this.speed;
+      // Time update → highlight sync
+      this.audio.addEventListener('timeupdate',()=>this.onTimeUpdate());
+      this.audio.addEventListener('ended',()=>{
+        this.playing=false;
+        this.paused=false;
+        this.clearHighlight();
+        this.curCueIdx=-1;
+        this.updateUI();
+      });
+      this.audio.play();
+      this.playing=true;
+      this.paused=false;
+    }catch(e){
+      console.error('TTS error:',e);
+      alert('TTS 请求失败');
+    }finally{
+      this.generating=false;
+      ttsPlay.disabled=false;
+      this.updateUI();
+    }
+  },
+
+  pause(){
+    if(this.audio&&this.playing){
+      this.audio.pause();
+      this.paused=true;
+      this.playing=false;
+      this.updateUI();
+    }
+  },
+
+  stop(){
+    if(this.audio){
+      this.audio.pause();
+      this.audio.currentTime=0;
+    }
+    this.clearHighlight();
+    this.curCueIdx=-1;
+    this.playing=false;
+    this.paused=false;
+    this.updateUI();
+  },
+
+  onTimeUpdate(){
+    if(!this.audio||!this.cues.length)return;
+    const t=this.audio.currentTime;
+    const dur=this.audio.duration||1;
+    // Update progress bar
+    ttsProgressFill.style.width=((t/dur)*100)+'%';
+    // Update time display
+    ttsInfo.textContent=this.formatTime(t)+' / '+this.formatTime(dur);
+    // Find current cue
+    let cIdx=-1;
+    for(let i=0;i<this.cues.length;i++){
+      if(t>=this.cues[i].start&&t<this.cues[i].end){cIdx=i;break;}
+    }
+    if(cIdx<0){
+      // Between cues — find the last cue that started before current time
+      for(let i=this.cues.length-1;i>=0;i--){
+        if(t>=this.cues[i].start){cIdx=i;break;}
+      }
+    }
+    if(cIdx>=0&&cIdx!==this.curCueIdx){
+      this.curCueIdx=cIdx;
+      // Highlight corresponding segment
+      if(this.segMap.length>cIdx){
+        const sIdx=this.segMap[cIdx];
+        if(sIdx>=0&&sIdx<this.segments.length){
+          this.highlightSegment(this.segments[sIdx]);
+        }
+      }
+    }
+  },
+
+  highlightSegment(seg){
+    this.clearHighlight();
+    if(!seg||!seg.el)return;
+    seg.el.classList.add('tts-highlight');
+    seg.el.scrollIntoView({behavior:'smooth',block:'center'});
+  },
+
+  clearHighlight(){
+    document.querySelectorAll('.tts-highlight').forEach(el=>el.classList.remove('tts-highlight'));
+  },
+
+  updateUI(){
+    if(this.generating){
+      ttsPlay.innerHTML='⏳ 生成中...';
+    }else if(this.playing){
+      ttsPlay.innerHTML='❚❚ 暂停';
+    }else if(this.paused){
+      ttsPlay.innerHTML='▶ 继续';
+    }else{
+      ttsPlay.innerHTML='▶ 播放';
+    }
+    if(!this.audio||!this.audio.duration){
+      if(!this.generating)ttsInfo.textContent='';
+    }
+    ttsSpeedBtn.textContent=this.speed.toFixed(1)+'x';
+  },
+
+  cycleSpeed(){
+    const idx=this.speeds.indexOf(this.speed);
+    this.speed=this.speeds[(idx+1)%this.speeds.length];
+    if(this.audio)this.audio.playbackRate=this.speed;
+    this.updateUI();
+  },
+
+  seekTo(ratio){
+    if(!this.audio||!this.audio.duration)return;
+    this.audio.currentTime=ratio*this.audio.duration;
+    if(!this.playing&&!this.paused){
+      // Just seeking without playing — show position
+      this.onTimeUpdate();
+    }
+  }
+};
+
+ttsToggle.addEventListener('click',()=>TTS.toggleBar());
+ttsPlay.addEventListener('click',()=>{
+  if(TTS.generating)return;
+  if(TTS.playing) TTS.pause();
+  else TTS.play();
+});
+ttsStop.addEventListener('click',()=>TTS.stop());
+ttsSpeedBtn.addEventListener('click',()=>TTS.cycleSpeed());
+ttsProgress.addEventListener('click',(e)=>{
+  const rect=ttsProgress.getBoundingClientRect();
+  const ratio=(e.clientX-rect.left)/rect.width;
+  TTS.seekTo(Math.max(0,Math.min(1,ratio)));
 });
 
 // ── Start: check auth first ──────────────────────────
