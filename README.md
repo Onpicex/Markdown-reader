@@ -1,6 +1,6 @@
 # Obsidian Reader 📚
 
-"某平台风格"知识库阅读器，直接映射 Obsidian Vault 的目录结构和内容，在浏览器中高效阅读。
+Markdown 知识库阅读器，直接映射 Obsidian Vault 的目录结构和内容，在浏览器中高效阅读。
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 

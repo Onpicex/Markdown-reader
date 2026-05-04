@@ -500,7 +500,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
       <div class="welcome" id="wc">
         <div class="ico">📖</div>
         <h2>知识库阅读器</h2>
-        <p>你的个人知识库，某平台网页版阅读体验。<br>从左侧选择一篇文章开始阅读。</p>
+        <p>你的个人知识库，沉浸式阅读体验。<br>从左侧选择一篇文章开始阅读。</p>
         <div class="stats" id="ws"></div>
       </div>
     </div>
@@ -691,7 +691,7 @@ function resolveWikiLink(name){
   // try with .md suffix stripped if present
   const k2=key.replace(/\.md$/,'');
   if(_wikiIndex[k2])return _wikiIndex[k2];
-  // support path-style links: "某平台课程/决策的54个基本/01-概率与期望值" → match article id
+  // support path-style links: "课程/决策的54个基本/01-概率与期望值" → match article id
   // try appending .md and checking with common prefixes
   if(C){
     const withMd=key.endsWith('.md')?key:key+'.md';
@@ -977,7 +977,7 @@ function expandSidebarTo(key,type){
   // On mobile, open sidebar first
   if(window.innerWidth<=1024) openSide();
   // For category: key is the category name like '📂 Raw', toggle its .ch
-  // For sub: key is like '📂 Raw/某平台课程/决策的54个基本'
+  // For sub: key is like '📂 Raw/课程/决策的54个基本'
   const targetId=hsh(key);
   const targetEl=document.getElementById(targetId);
   if(!targetEl)return;
@@ -1369,7 +1369,7 @@ document.querySelector('.side-brand').addEventListener('click',function(){
   location.hash='';
   bc.innerHTML='';
   document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
-  ct.innerHTML='<div class="welcome" id="wc"><div class="ico">📖</div><h2>知识库阅读器</h2><p>你的个人知识库，某平台网页版阅读体验。<br>从左侧选择一篇文章开始阅读。</p><div class="stats" id="ws"></div></div>';
+  ct.innerHTML='<div class="welcome" id="wc"><div class="ico">📖</div><h2>知识库阅读器</h2><p>你的个人知识库，沉浸式阅读体验。<br>从左侧选择一篇文章开始阅读。</p><div class="stats" id="ws"></div></div>';
   if(C){document.getElementById('ws').innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';}
   closeSide();
 });
