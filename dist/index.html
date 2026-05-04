@@ -1956,6 +1956,15 @@ function findQuoteForWikiLink(linkEl){
   return null;
 }
 
+// ── 滚动元素到内容区上方 1/3 处 ─────
+function scrollElIntoView(el){
+  const ctRect=ct.getBoundingClientRect();
+  const elRect=el.getBoundingClientRect();
+  const offset=elRect.top-ctRect.top+ct.scrollTop;
+  const target=offset-ct.clientHeight*0.25;
+  ct.scrollTo({top:Math.max(0,target),behavior:'smooth'});
+}
+
 // ── 从笔记.md 链接跳转到文字位置 ─────
 function scrollToHighlight(searchText){
   if(!searchText)return;
@@ -1965,7 +1974,7 @@ function scrollToHighlight(searchText){
   const marks=body.querySelectorAll('mark.ann-hl,mark.ann-note');
   for(const m of marks){
     if(m.textContent.includes(searchText.slice(0,15))){
-      m.scrollIntoView({behavior:'smooth',block:'center'});
+      scrollElIntoView(m);
       m.classList.add('ann-flash');
       setTimeout(()=>m.classList.remove('ann-flash'),3000);
       return;
@@ -1984,7 +1993,7 @@ function scrollToHighlight(searchText){
       const mark=document.createElement('mark');
       mark.className='ann-hl ann-flash';
       range.surroundContents(mark);
-      mark.scrollIntoView({behavior:'smooth',block:'center'});
+      scrollElIntoView(mark);
       setTimeout(()=>{
         mark.classList.remove('ann-flash');
       },3000);
@@ -2407,7 +2416,7 @@ const TTS={
     this.clearHighlight();
     if(!seg||!seg.el)return;
     seg.el.classList.add('tts-highlight');
-    seg.el.scrollIntoView({behavior:'smooth',block:'center'});
+    scrollElIntoView(seg.el);
   },
 
   clearHighlight(){
@@ -2558,7 +2567,7 @@ const InlineAudio={
           document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
           if(segments[sIdx]&&segments[sIdx].el){
             segments[sIdx].el.classList.add('tts-highlight','inline-audio-hl');
-            segments[sIdx].el.scrollIntoView({behavior:'smooth',block:'center'});
+            scrollElIntoView(segments[sIdx].el);
           }
         }
       };
