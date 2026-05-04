@@ -170,9 +170,9 @@ function jsonReply(res, code, obj) {
 
 function readBody(req) {
   return new Promise((resolve) => {
-    let d = '';
-    req.on('data', c => d += c);
-    req.on('end', () => resolve(d));
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
   });
 }
 
