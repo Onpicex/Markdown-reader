@@ -753,7 +753,7 @@ function convertWikiLinks(md){
   md=md.replace(/%%CB_(\d+)%%/g, function(_,idx){
     const cb=_cbPlaceholders[parseInt(idx)];
     if(!cb)return _;
-    return '<input type="checkbox" disabled'+(cb.checked?' checked':'')+' style="margin-right:6px;vertical-align:middle;pointer-events:none">';
+    return '<input type="checkbox" class="cb-toggle" data-cb-index="'+idx+'"'+(cb.checked?' checked':'')+' style="margin-right:6px;vertical-align:middle;cursor:pointer">';
   });
   return md;
 }
@@ -1019,6 +1019,34 @@ function expandSidebarTo(key,type){
   saveSidebarState();
 }
 
+// ── Toggle checkbox in reading mode ─────────────────────
+async function toggleCheckbox(articleId,cbIndex,newChecked){
+  try{
+    const r=await fetch('/vault/'+articleId.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
+    if(!r.ok)throw new Error('fetch failed');
+    let md=await r.text();
+    let matchCount=0;
+    md=md.replace(/^(\s*[-*+]\s+|\s*\d+\.\s+)?\[([ xX])\]/gm,function(match,prefix,check){
+      if(matchCount++===cbIndex){
+        const newMark=newChecked?'x':' ';
+        return (prefix||'')+'['+newMark+']';
+      }
+      return match;
+    });
+    const sr=await fetch('/vault/'+articleId.split('/').map(s=>encodeURIComponent(s)).join('/'),{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content:md})
+    });
+    const d=await sr.json();
+    if(!d.ok)throw new Error(d.error||'save failed');
+  }catch(e){
+    const el=ct.querySelector('input.cb-toggle[data-cb-index="'+cbIndex+'"]');
+    if(el)el.checked=!newChecked;
+    console.error('Checkbox toggle failed:',e);
+  }
+}
+
 // ── Load article (fetch raw markdown, render in browser) ─
 async function loadArticle(id){
   if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];}
@@ -1135,6 +1163,15 @@ async function loadArticle(id){
         loadArticle(targetId);
       }
     }));
+    // Bind checkbox toggles (reading mode)
+    ct.querySelectorAll('input.cb-toggle[data-cb-index]').forEach(cb=>{
+      cb.addEventListener('change',async function(){
+        if(!curId)return;
+        const checked=this.checked;
+        const cbIdx=parseInt(this.dataset.cbIndex);
+        await toggleCheckbox(curId,cbIdx,checked);
+      });
+    });
     // Update sidebar active
     document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
     const el=document.querySelector('.ai[data-id="'+CSS.escape(id)+'"]');
