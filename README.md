@@ -23,7 +23,8 @@ Markdown 知识库阅读器，直接映射 Obsidian Vault 的目录结构和内�
 - ⬅️➡️ **上下篇导航** — 文章底部快速切换前/后一篇
 - 📂 **递归目录树** — 侧边栏多级目录展开/折叠，记忆展开状态
 - ✏️ **编辑模式** — 一键切换阅读/编辑模式，直接修改 Markdown 源文件
-- ☑️ **Checkbox 渲染** — Markdown 复选框正确渲染
+- ☑️ **可点击 Checkbox** — 阅读模式下直接勾选/取消 Checkbox，自动保存到源文件
+- ⚙️ **TTS 开关** — 设置中一键开关 TTS 听书功能，即时生效并持久化
 - 🍞 **面包屑导航** — 可点击的层级路径导航
 - 🔄 **热扫描** — 新增/删除文章后点击 🔄 即时更新目录，vault 变更自动检测
 - ⚡ **极速加载** — localStorage 缓存 + ETag 304 + gzip 压缩，目录秒出
@@ -150,7 +151,8 @@ cp config.example.json config.json
   "vault": "/path/to/your/obsidian/vault",
   "port": 8765,
   "bind": "0.0.0.0",
-  "password": "your-secure-password"
+  "password": "your-secure-password",
+  "ttsEnabled": true
 }
 ```
 
@@ -160,6 +162,7 @@ cp config.example.json config.json
 | `port` | 服务端口（默认 8765） |
 | `bind` | 绑定地址（`0.0.0.0` 允许局域网访问，`127.0.0.1` 仅本机） |
 | `password` | 访问密码（留空 `""` 关闭密码功能） |
+| `ttsEnabled` | TTS 听书功能开关（默认 `true`，设为 `false` 隐藏所有 TTS 相关按钮） |
 
 ### 启动
 
