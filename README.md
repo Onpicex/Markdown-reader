@@ -1,4 +1,4 @@
-# Obsidian Reader 📚
+# Markdown Reader 📚
 
 Markdown 知识库阅读器，直接映射 Obsidian Vault 的目录结构和内容，在浏览器中高效阅读。
 
@@ -133,8 +133,8 @@ pip install mlx-whisper
 ### 安装
 
 ```bash
-git clone https://github.com/Onpicex/obsidian-reader.git
-cd obsidian-reader
+git clone https://github.com/Onpicex/Markdown-reader.git
+cd Markdown-reader
 
 # 创建配置
 cp config.example.json config.json
@@ -264,7 +264,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 ## 文件结构
 
 ```
-obsidian-reader/
+Markdown-reader/
 ├── config.example.json  — 配置模板
 ├── config.json          — 配置（.gitignore 忽略）
 ├── scan.py              — vault 扫描器（Python）
