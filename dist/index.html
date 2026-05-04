@@ -451,6 +451,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
           <span class="tts-slider" style="position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.3s"></span>
         </span>
         <span style="font-size:13px;color:var(--text)">TTS 听书功能</span>
+        <span id="cfgTtsLabel" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--gold);color:#fff">开</span>
       </label>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:14px">
@@ -523,7 +524,8 @@ mark.ann-flash{animation:annFlash .5s ease 3}
 
 <!-- Share excerpt bar (appears on text selection) -->
 <div class="share-bar" id="shareBar">
-  <button id="shareTtsPlay">🎧 从此处听</button>
+  <button id="shareTtsBtn">🎧 TTS</button>
+  <button id="shareMp3Btn" style="display:none">🎵 MP3</button>
   <button id="shareExcerpt">📋 分享书摘</button>
   <button id="shareHighlight">🖍️ 划线</button>
   <button id="shareNote">📝 记笔记</button>
@@ -1277,10 +1279,20 @@ const cfgTts=$('cfgTts');
 function applyTtsSetting(enabled){
   ttsFeatureEnabled=enabled;
   const ttsBtn=$('ttsToggle');
-  const shareBtn=$('shareTtsPlay');
+  const shareTtsBtn=$('shareTtsBtn');
+  const shareMp3Btn=$('shareMp3Btn');
   if(ttsBtn) ttsBtn.style.display=enabled?'':'none';
-  if(shareBtn) shareBtn.style.display=enabled?'':'none';
+  if(shareTtsBtn) shareTtsBtn.style.display=enabled?'':'none';
+  // MP3 button visibility depends on InlineAudio, not TTS setting
+  if(shareMp3Btn) shareMp3Btn.style.display=(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0)?'':'none';
   if(!enabled && typeof TTS!=='undefined' && TTS.audio) TTS.stop();
+  // Update toggle label
+  const lbl=$('cfgTtsLabel');
+  if(lbl){
+    lbl.textContent=enabled?'\u5f00':'\u5173';
+    lbl.style.background=enabled?'var(--gold)':'#999';
+  }
+  cfgTts.checked=enabled;
 }
 // Load TTS setting on startup
 (async()=>{
@@ -1290,6 +1302,21 @@ function applyTtsSetting(enabled){
     applyTtsSetting(d.ttsEnabled!==false);
   }catch(e){}
 })();
+// Immediately save TTS toggle on change (no need to click "保存并重新扫描")
+cfgTts.addEventListener('change',async function(){
+  const enabled=cfgTts.checked;
+  try{
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ttsEnabled:enabled})});
+    const d=await r.json();
+    if(d.ok){
+      applyTtsSetting(d.ttsEnabled!==false);
+    }else{
+      cfgTts.checked=!enabled; // revert on failure
+    }
+  }catch(e){
+    cfgTts.checked=!enabled; // revert on failure
+  }
+});
 settings.addEventListener('click',async function(){
   try{
     const r=await fetch('/api/config');
@@ -1459,12 +1486,11 @@ function showShareBarIfSelected(){
   const text=sel.toString().trim();
   if(text.length<2){shareBar.classList.remove('vis');return;}
   selectedText=text;
-  // Update TTS/MP3 button label based on active inline audio
-  if(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0){
-    shareTtsPlay.textContent='🎵 从此处听(MP3)';
-  }else{
-    shareTtsPlay.textContent='🎧 从此处听';
-  }
+  // Show/hide MP3 button based on active inline audio; show TTS button based on setting
+  const _mp3Btn=$('shareMp3Btn');
+  const _ttsBtn=$('shareTtsBtn');
+  if(_mp3Btn) _mp3Btn.style.display=(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0)?'':'none';
+  if(_ttsBtn) _ttsBtn.style.display=ttsFeatureEnabled?'':'none';
   // Position bar below the selection (avoids fighting with system menu above)
   const range=sel.getRangeAt(0);
   const rect=range.getBoundingClientRect();
@@ -1518,27 +1544,35 @@ shareThemes.addEventListener('click',function(e){
   try{localStorage.setItem('shareTheme',curTheme)}catch(e){}
 });
 
-// Play TTS from selected text
-const shareTtsPlay=$('shareTtsPlay');
+// Play TTS / MP3 from selected text (two separate buttons)
+const shareTtsBtn=$('shareTtsBtn');
+const shareMp3Btn=$('shareMp3Btn');
 // Lock share bar on mousedown/touchstart so selectionchange doesn't hide it before click fires
 shareBar.addEventListener('mousedown',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);});
 shareBar.addEventListener('touchstart',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);},{passive:true});
-shareTtsPlay.addEventListener('click',function(e){
+// TTS button — always uses TTS.playFromText
+shareTtsBtn.addEventListener('click',function(e){
   e.stopPropagation();
   _shareBarLock=false;
-  const text=selectedText; // capture before clearing
-  if(!text){console.log('[tts] shareTtsPlay: no selectedText');return;}
+  const text=selectedText;
+  if(!text){console.log('[tts] shareTtsBtn: no selectedText');return;}
   shareBar.classList.remove('vis');
   window.getSelection().removeAllRanges();
-  // If inline audio follow-along is active, seek in MP3 instead of TTS
-  if(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0){
-    console.log('[inline-audio] shareTtsPlay → seekToText, text:',text.slice(0,30));
-    if(InlineAudio.seekToText(text))return;
-    // If seek failed (no matching segment), fall through to TTS
-    console.log('[inline-audio] seekToText failed, falling back to TTS');
-  }
-  console.log('[tts] shareTtsPlay clicked, text:',text.slice(0,30));
+  console.log('[tts] shareTtsBtn clicked, text:',text.slice(0,30));
   TTS.playFromText(text);
+});
+// MP3 button — always uses InlineAudio.seekToText
+shareMp3Btn.addEventListener('click',function(e){
+  e.stopPropagation();
+  _shareBarLock=false;
+  const text=selectedText;
+  if(!text){console.log('[inline-audio] shareMp3Btn: no selectedText');return;}
+  shareBar.classList.remove('vis');
+  window.getSelection().removeAllRanges();
+  console.log('[inline-audio] shareMp3Btn clicked, text:',text.slice(0,30));
+  if(typeof InlineAudio!=='undefined'){
+    InlineAudio.seekToText(text);
+  }
 });
 
 // Open share card
@@ -2961,6 +2995,20 @@ async function enterEditMode(){
   if(!curId)return;
   // Save scroll position before switching to edit mode
   _editScrollTop=ct.scrollTop;
+  // Find first visible paragraph/heading text for smart scroll positioning
+  let _targetText='';
+  const artBody=ct.querySelector('.art-body');
+  if(artBody){
+    const els=artBody.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li,blockquote,pre');
+    const ctRect=ct.getBoundingClientRect();
+    for(const el of els){
+      const rect=el.getBoundingClientRect();
+      if(rect.top>=ctRect.top-10){
+        _targetText=el.textContent.trim().slice(0,60);
+        break;
+      }
+    }
+  }
   // Fetch raw markdown
   try{
     const r=await fetch('/vault/'+curId.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
@@ -2986,8 +3034,33 @@ async function enterEditMode(){
   const editArea=$('editArea');
   editArea.value=rawMarkdown;
   editArea.focus();
-  // Restore approximate scroll position in textarea
-  setTimeout(()=>{ editArea.scrollTop=_editScrollTop; },0);
+  // Smart scroll: find matching text position in raw markdown
+  if(_targetText && _targetText.length>5){
+    const searchStr=_targetText.slice(0,40);
+    const lines=rawMarkdown.split('\n');
+    let charPos=-1;
+    for(let i=0;i<lines.length;i++){
+      // Strip markdown syntax for matching
+      const plainLine=lines[i].replace(/^#{1,6}\s+/,'').replace(/[\*\_\~\`]/g,'');
+      if(plainLine.includes(searchStr.slice(0,30))){
+        charPos=lines.slice(0,i).join('\n').length;
+        break;
+      }
+    }
+    if(charPos>=0){
+      editArea.setSelectionRange(charPos,charPos);
+      setTimeout(()=>{
+        const linesBefore=rawMarkdown.slice(0,charPos).split('\n').length;
+        const lineHeight=parseFloat(getComputedStyle(editArea).lineHeight)||20;
+        editArea.scrollTop=Math.max(0,(linesBefore-2)*lineHeight);
+      },50);
+    }else{
+      // Fallback: ratio-based scroll
+      setTimeout(()=>{ editArea.scrollTop=_editScrollTop; },0);
+    }
+  }else{
+    setTimeout(()=>{ editArea.scrollTop=_editScrollTop; },0);
+  }
   // Auto-resize
   function autoResize(){
     editArea.style.height='auto';
