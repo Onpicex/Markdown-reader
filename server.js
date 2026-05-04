@@ -861,19 +861,27 @@ const server = http.createServer(async (req, res) => {
   // /api/config - GET current config, POST update vault path
   if (pathname === '/api/config') {
     if (req.method === 'GET') {
-      jsonReply(res, 200, { vault: config.vault });
+      jsonReply(res, 200, { vault: config.vault, ttsEnabled: config.ttsEnabled !== false });
       return;
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
       try {
-        const { vault } = JSON.parse(body);
-        if (vault && typeof vault === 'string') {
-          config.vault = vault;
+        const parsed = JSON.parse(body);
+        let changed = false;
+        if (parsed.vault && typeof parsed.vault === 'string') {
+          config.vault = parsed.vault;
+          changed = true;
+        }
+        if (typeof parsed.ttsEnabled === 'boolean') {
+          config.ttsEnabled = parsed.ttsEnabled;
+          changed = true;
+        }
+        if (changed) {
           saveConfig(config);
-          jsonReply(res, 200, { ok: true, vault: config.vault });
+          jsonReply(res, 200, { ok: true, vault: config.vault, ttsEnabled: config.ttsEnabled !== false });
         } else {
-          jsonReply(res, 400, { ok: false, error: 'Invalid vault path' });
+          jsonReply(res, 400, { ok: false, error: 'No valid fields provided' });
         }
       } catch {
         jsonReply(res, 400, { ok: false, error: 'Bad request' });

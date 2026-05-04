@@ -212,6 +212,9 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .tb-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-faint)}
 
 /* Back to top */
+.tts-slider::before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
+#cfgTts:checked+.tts-slider{background:var(--gold)}
+#cfgTts:checked+.tts-slider::before{transform:translateX(20px)}
 .btt{position:fixed;bottom:24px;right:24px;width:38px;height:38px;border-radius:50%;background:var(--gold);color:#fff;border:none;font-size:16px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;z-index:50;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12)}
 .btt.vis{opacity:1;transform:translateY(0)}
 .btt:hover{background:var(--gold-light)}
@@ -439,6 +442,16 @@ mark.ann-flash{animation:annFlash .5s ease 3}
     <div class="modal-btns" style="margin-bottom:18px">
       <button id="cfgCancel">取消</button>
       <button class="primary" id="cfgSave">保存并重新扫描</button>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:18px">
+      <h3 style="font-size:14px;margin-bottom:12px">🎧 功能开关</h3>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none">
+        <span style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0">
+          <input type="checkbox" id="cfgTts" checked style="opacity:0;width:0;height:0;position:absolute">
+          <span class="tts-slider" style="position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.3s"></span>
+        </span>
+        <span style="font-size:13px;color:var(--text)">TTS 听书功能</span>
+      </label>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:14px">
       <h3 style="font-size:14px;margin-bottom:12px">🔒 修改密码</h3>
@@ -1259,11 +1272,30 @@ rescan.addEventListener('click',async function(){
 });
 
 // ── Settings modal ───────────────────────────────────
+let ttsFeatureEnabled=true;
+const cfgTts=$('cfgTts');
+function applyTtsSetting(enabled){
+  ttsFeatureEnabled=enabled;
+  const ttsBtn=$('ttsToggle');
+  const shareBtn=$('shareTtsPlay');
+  if(ttsBtn) ttsBtn.style.display=enabled?'':'none';
+  if(shareBtn) shareBtn.style.display=enabled?'':'none';
+  if(!enabled && typeof TTS!=='undefined' && TTS.audio) TTS.stop();
+}
+// Load TTS setting on startup
+(async()=>{
+  try{
+    const r=await fetch('/api/config');
+    const d=await r.json();
+    applyTtsSetting(d.ttsEnabled!==false);
+  }catch(e){}
+})();
 settings.addEventListener('click',async function(){
   try{
     const r=await fetch('/api/config');
     const d=await r.json();
     cfgVault.value=d.vault||'';
+    cfgTts.checked=d.ttsEnabled!==false;
   }catch(e){}
   modalBg.classList.add('on');
 });
@@ -1272,10 +1304,12 @@ modalBg.addEventListener('click',e=>{if(e.target===modalBg)modalBg.classList.rem
 cfgSave.addEventListener('click',async function(){
   const vault=cfgVault.value.trim();
   if(!vault){alert('路径不能为空');return;}
+  const ttsEnabled=cfgTts.checked;
   try{
-    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vault})});
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vault,ttsEnabled})});
     const d=await r.json();
     if(d.ok){
+      applyTtsSetting(d.ttsEnabled!==false);
       modalBg.classList.remove('on');
       rescan.click();
     }else{
