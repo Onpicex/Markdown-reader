@@ -25,6 +25,14 @@
   --quote-bg:#222;--code-bg:#252525;
   --read-color:#555;
 }
+.eye-care{
+  --bg:#f5f0e1;--bg-side:#f0ead6;--bg-side-hover:#ebe5d0;--bg-side-active:#e5dfc8;
+  --gold:#A07830;--gold-light:#C09840;--gold-faint:rgba(160,120,48,.1);
+  --text:#4a4a3a;--text-2:#6a6a5a;--text-3:#8a8a7a;--text-title:#3a3a2a;
+  --border:#d8d0b8;--border-lt:#e8e0c8;
+  --quote-bg:#ede7d4;--code-bg:#eee8d5;
+  --read-color:#b0a890;
+}
 html{font-size:16px}
 body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:var(--lh);overflow:hidden;height:100vh;transition:background var(--tr),color var(--tr);overscroll-behavior:none}
 html{overflow-x:hidden}
@@ -44,7 +52,7 @@ html{overflow-x:hidden}
 /* ── Sidebar ─────────────────────────────────────────── */
 .side{width:var(--side-w);min-width:var(--side-w);height:100vh;background:var(--bg-side);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:transform .25s ease,background var(--tr);z-index:100}
 .side-hd{padding:20px 16px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
-.side-brand{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.side-brand{display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer}
 .side-brand h1{font-size:15px;font-weight:700;color:var(--text-title);letter-spacing:.3px}
 .side-brand .ico{font-size:20px}
 .sbox{position:relative}
@@ -67,7 +75,7 @@ html{overflow-x:hidden}
 .ch.open .arr{transform:rotate(90deg)}
 .ci{display:none}.ci.open{display:block}
 
-/* Subcategory */
+/* Subcategory (recursive depth) */
 .sh{display:flex;align-items:center;padding:5px 16px 5px 26px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text-3);user-select:none;transition:background var(--tr)}
 .sh:hover{background:var(--bg-side-hover);color:var(--text-2)}
 .sh .arr{font-size:8px;color:var(--text-3);transition:transform .15s;margin-right:5px;display:inline-block}
@@ -89,7 +97,11 @@ html{overflow-x:hidden}
 .tb-l{display:flex;align-items:center;gap:8px;min-width:0;flex-shrink:1;overflow:hidden}
 .tb-r{display:flex;align-items:center;gap:10px;flex-shrink:0}
 .ham{display:none;background:none;border:none;font-size:20px;color:var(--text-2);cursor:pointer;padding:4px}
-.bc{font-size:13px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bc{font-size:13px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:0}
+.bc-seg{cursor:pointer;transition:color var(--tr);padding:2px 0}
+.bc-seg:hover{color:var(--gold)}
+.bc-sep{margin:0 4px;color:var(--text-3);flex-shrink:0}
+.bc-leaf{color:var(--text-2);cursor:default;overflow:hidden;text-overflow:ellipsis}
 .tb-btn{background:none;border:1px solid var(--border);border-radius:5px;padding:3px 9px;font-size:13px;color:var(--text-2);cursor:pointer;font-family:var(--font);transition:all var(--tr);white-space:nowrap}
 .tb-btn:hover{border-color:var(--gold-light);color:var(--text)}
 
@@ -112,10 +124,12 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 /* Body typography */
 /* Read toggle button */
 .art-actions{margin-top:12px}
-.art-ft{margin-top:32px;padding-top:20px;border-top:1px solid var(--border-lt);text-align:center}
+.art-ft{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:32px;padding-top:20px;border-top:1px solid var(--border)}
 .read-toggle{display:inline-flex;align-items:center;gap:4px;padding:6px 16px;border:1px solid var(--border);border-radius:20px;background:var(--bg);color:var(--text-2);font-size:13px;font-family:var(--font);cursor:pointer;transition:all var(--tr)}
 .read-toggle:hover{border-color:var(--gold-light);color:var(--gold)}
 .read-toggle.is-read{background:var(--gold-faint);border-color:var(--gold);color:var(--gold)}
+.nav-btn{display:inline-flex;align-items:center;gap:4px;padding:6px 16px;border:1px solid var(--border);border-radius:20px;background:var(--bg);color:var(--text-2);font-size:13px;font-family:var(--font);cursor:pointer;transition:all var(--tr)}
+.nav-btn:hover{border-color:var(--gold-light);color:var(--gold)}
 
 .art-body{font-size:var(--fs);line-height:var(--lh);letter-spacing:.2px}
 .art-body p{margin-bottom:1.5em;text-align:justify}
@@ -172,13 +186,30 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .tts-btn{background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:13px;color:var(--text-2);cursor:pointer;font-family:var(--font);transition:all var(--tr);white-space:nowrap;display:flex;align-items:center;gap:4px}
 .tts-btn:hover{border-color:var(--gold-light);color:var(--text)}
 .tts-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-faint)}
-.tts-speed{font-size:12px;color:var(--text-3);cursor:pointer;padding:2px 6px;border-radius:4px;user-select:none}
-.tts-speed:hover{color:var(--text);background:var(--gold-faint)}
+.tts-speed-wrap{position:relative;display:inline-flex;align-items:center}
+.tts-speed-select{font-size:12px;color:var(--text-3);padding:2px 6px;border-radius:4px;border:none;background:transparent;cursor:pointer;font-family:var(--font);appearance:none;-webkit-appearance:none;outline:none}
+.tts-speed-select:hover{color:var(--text);background:var(--gold-faint)}
+.tts-speed-select option{background:var(--bg);color:var(--text)}
 .tts-progress{flex:1;height:3px;background:var(--border);border-radius:2px;cursor:pointer;position:relative;min-width:60px}
 .tts-progress-fill{height:100%;background:var(--gold);border-radius:2px;transition:width .3s;width:0}
 .tts-info{font-size:11px;color:var(--text-3);white-space:nowrap}
 .tts-highlight{background:rgba(212,169,66,.18);border-radius:3px;transition:background .2s;cursor:pointer}
 .dark .tts-highlight{background:rgba(212,169,66,.15)}
+.inline-audio-paused.tts-highlight{background:rgba(212,169,66,.10);animation:ia-pulse 1.5s ease-in-out infinite}
+.dark .inline-audio-paused.tts-highlight{background:rgba(212,169,66,.07)}
+@keyframes ia-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+/* Edit mode */
+.edit-wrap{max-width:var(--max-w);margin:0 auto;display:flex;flex-direction:column;height:100%}
+.edit-toolbar{display:flex;align-items:center;gap:8px;padding:12px 0;flex-shrink:0}
+.edit-toolbar button{padding:6px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font);border:1px solid var(--border);background:var(--bg);color:var(--text-2);transition:all var(--tr)}
+.edit-toolbar button:hover{border-color:var(--gold-light);color:var(--text)}
+.edit-toolbar .edit-save{background:var(--gold);color:#fff;border-color:var(--gold)}
+.edit-toolbar .edit-save:hover{background:var(--gold-light)}
+.edit-toolbar .edit-hint{font-size:12px;color:var(--text-3);margin-left:auto}
+.edit-textarea{flex:1;width:100%;resize:none;border:1px solid var(--border);border-radius:8px;padding:16px 18px;font-family:var(--mono);font-size:14px;line-height:1.7;background:var(--bg);color:var(--text);outline:none;transition:border-color var(--tr);min-height:400px}
+.edit-textarea:focus{border-color:var(--gold)}
+.tb-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-faint)}
 
 /* Back to top */
 .btt{position:fixed;bottom:24px;right:24px;width:38px;height:38px;border-radius:50%;background:var(--gold);color:#fff;border:none;font-size:16px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;z-index:50;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12)}
@@ -320,6 +351,69 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
   .tb-r{gap:4px}
   .tb-btn{padding:2px 5px;font-size:11px}
 }
+/* ── Note modal ─────────────────────────── */
+.note-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:250;align-items:center;justify-content:center}
+.note-overlay.on{display:flex}
+.note-modal{background:var(--bg);border-radius:12px;padding:24px;max-width:520px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,.18);font-family:var(--font)}
+.note-modal h3{font-size:16px;font-weight:700;color:var(--text-title);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+.note-quote{margin-bottom:14px;padding:12px 16px;border-left:3px solid var(--gold);background:var(--quote-bg);border-radius:0 6px 6px 0;font-size:14px;color:var(--text-2);line-height:1.7;max-height:120px;overflow-y:auto}
+.note-textarea{width:100%;min-height:100px;resize:vertical;border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-family:var(--font);font-size:14px;line-height:1.7;background:var(--bg);color:var(--text);outline:none;transition:border-color var(--tr)}
+.note-textarea:focus{border-color:var(--gold)}
+.note-textarea::placeholder{color:var(--text-3)}
+.note-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.note-btns button{padding:7px 18px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font);border:1px solid var(--border);background:var(--bg);color:var(--text-2);transition:all var(--tr)}
+.note-btns button:hover{opacity:.85}
+.note-btns .note-save{background:var(--gold);color:#fff;border-color:var(--gold)}
+.note-btns .note-save:hover{background:var(--gold-light)}
+
+/* ── Audio embed transcribe button ────────── */
+.audio-embed-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.audio-sub-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border:1px solid var(--border);border-radius:16px;background:var(--bg);color:var(--text-2);font-size:12px;font-family:var(--font);cursor:pointer;transition:all var(--tr);white-space:nowrap}
+.audio-sub-btn:hover{border-color:var(--gold-light);color:var(--gold)}
+.audio-sub-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-faint)}
+.audio-sub-btn:disabled{opacity:.6;cursor:not-allowed}
+
+/* Toast */
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);padding:10px 24px;background:rgba(0,0,0,.78);color:#fff;border-radius:8px;font-size:14px;font-family:var(--font);z-index:9999;pointer-events:none;opacity:0;transition:opacity .25s}
+.toast.vis{opacity:1}
+
+/* ── Annotation highlights (from 笔记.md) ── */
+mark.ann-hl{background:rgba(255,235,59,.28);border-radius:2px;padding:0 1px;cursor:pointer;transition:background .2s}
+mark.ann-note{background:rgba(76,175,80,.18);border-bottom:1.5px dashed rgba(76,175,80,.5);border-radius:2px;padding:0 1px;cursor:pointer;transition:background .2s}
+mark.ann-hl:hover{background:rgba(255,235,59,.45)}
+mark.ann-note:hover{background:rgba(76,175,80,.32)}
+.ann-tooltip{position:fixed;max-width:300px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);font-size:13px;line-height:1.6;color:var(--text);z-index:160;pointer-events:none;opacity:0;transition:opacity .15s}
+.ann-tooltip.vis{opacity:1}
+.ann-tooltip .ann-tt-note{color:var(--text);margin-bottom:4px}
+.ann-tooltip .ann-tt-date{color:var(--text-3);font-size:11px}
+/* ── Annotation actions panel ── */
+.ann-actions{position:fixed;display:none;align-items:center;gap:2px;padding:4px;background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:170;transform:translateX(-50%);animation:annActIn .15s ease}
+.ann-actions.vis{display:flex}
+@keyframes annActIn{from{opacity:0;transform:translateX(-50%) translateY(4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.ann-actions button{display:flex;align-items:center;gap:4px;padding:6px 12px;border:none;border-radius:5px;background:none;color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;white-space:nowrap;transition:background .12s}
+.ann-actions button:hover{background:var(--gold-faint);color:var(--gold)}
+.ann-actions .ann-act-del:hover{background:rgba(231,76,60,.1);color:#e74c3c}
+/* ── Edit note modal ── */
+.edit-note-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:250;align-items:center;justify-content:center}
+.edit-note-overlay.on{display:flex}
+.edit-note-modal{background:var(--bg);border-radius:12px;padding:24px;max-width:520px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,.18);font-family:var(--font)}
+.edit-note-modal h3{font-size:16px;font-weight:700;color:var(--text-title);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+/* ── Jump highlight flash animation ── */
+@keyframes annFlash{0%{background:rgba(255,193,7,.5)}50%{background:rgba(255,193,7,.15)}100%{background:rgba(255,193,7,.5)}}
+mark.ann-flash{animation:annFlash .5s ease 3}
+/* ── Theme picker panel ─────────────────── */
+.theme-panel{display:none;position:absolute;right:0;top:100%;margin-top:6px;background:var(--bg);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:160;padding:8px;min-width:160px;animation:themeIn .15s ease}
+@keyframes themeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.theme-panel.on{display:block}
+.theme-panel-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:7px;cursor:pointer;transition:background .12s;font-size:13px;color:var(--text);white-space:nowrap}
+.theme-panel-item:hover{background:var(--bg-side-hover)}
+.theme-panel-item.active{background:var(--gold-faint);color:var(--gold);font-weight:600}
+.theme-panel-item .tp-dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--border);flex-shrink:0}
+.theme-panel-item.active .tp-dot{border-color:var(--gold)}
+.tp-dot-light{background:linear-gradient(135deg,#fff,#f5f5f5)}
+.tp-dot-dark{background:linear-gradient(135deg,#2a2a2a,#1a1a1a)}
+.tp-dot-eyecare{background:linear-gradient(135deg,#f5f0e1,#e5dfc8)}
+
 *{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 </style>
 </head>
@@ -382,11 +476,17 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
     <div class="toolbar">
       <div class="tb-l"><button class="ham" id="ham">☰</button><span class="bc" id="bc"></span></div>
       <div class="tb-r">
+        <button class="tb-btn" id="editToggle" title="编辑" style="display:none">📝</button>
         <button class="tb-btn" id="ttsToggle" title="听书">🎧</button>
         <button class="tb-btn" id="fdec">A-</button>
         <button class="tb-btn" id="frst" title="重置字体">A</button>
         <button class="tb-btn" id="finc">A+</button>
-        <button class="tb-btn" id="thm">🌙</button>
+        <span style="position:relative"><button class="tb-btn" id="thm">🌙</button>
+        <div class="theme-panel" id="themePanel">
+          <div class="theme-panel-item active" data-theme="light"><span class="tp-dot tp-dot-light"></span>浅色</div>
+          <div class="theme-panel-item" data-theme="dark"><span class="tp-dot tp-dot-dark"></span>深色</div>
+          <div class="theme-panel-item" data-theme="eye-care"><span class="tp-dot tp-dot-eyecare"></span>护眼</div>
+        </div></span>
       </div>
     </div>
     <div class="tts-bar" id="ttsBar">
@@ -394,7 +494,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
       <button class="tts-btn" id="ttsStop" title="停止">⏹</button>
       <div class="tts-progress" id="ttsProgress"><div class="tts-progress-fill" id="ttsProgressFill"></div></div>
       <span class="tts-info" id="ttsInfo"></span>
-      <span class="tts-speed" id="ttsSpeed" title="语速">1.0x</span>
+      <span class="tts-speed-wrap"><select class="tts-speed-select" id="ttsSpeed" title="语速"><option value="0.6">0.6x</option><option value="0.8">0.8x</option><option value="1" selected>1.0x</option><option value="1.2">1.2x</option><option value="1.5">1.5x</option><option value="1.8">1.8x</option><option value="2">2.0x</option></select></span>
     </div>
     <div class="content" id="ct">
       <div class="welcome" id="wc">
@@ -412,7 +512,47 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 <div class="share-bar" id="shareBar">
   <button id="shareTtsPlay">🎧 从此处听</button>
   <button id="shareExcerpt">📋 分享书摘</button>
+  <button id="shareHighlight">🖍️ 划线</button>
+  <button id="shareNote">📝 记笔记</button>
 </div>
+
+<!-- Note modal -->
+<div class="note-overlay" id="noteOverlay">
+  <div class="note-modal">
+    <h3>📝 记笔记</h3>
+    <div class="note-quote" id="noteQuote"></div>
+    <textarea class="note-textarea" id="noteText" placeholder="写下你的想法..."></textarea>
+    <div class="note-btns">
+      <button id="noteCancel">取消</button>
+      <button class="note-save" id="noteSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Annotation tooltip -->
+<div class="ann-tooltip" id="annTooltip"></div>
+
+<!-- Annotation actions panel -->
+<div class="ann-actions" id="annActions">
+  <button id="annActEdit">✏️ 编辑</button>
+  <button id="annActDel" class="ann-act-del">🗑️ 删除</button>
+</div>
+
+<!-- Edit note modal -->
+<div class="edit-note-overlay" id="editNoteOverlay">
+  <div class="edit-note-modal">
+    <h3>✏️ 编辑笔记</h3>
+    <div class="note-quote" id="editNoteQuote"></div>
+    <textarea class="note-textarea" id="editNoteText" placeholder="写下你的想法..."></textarea>
+    <div class="note-btns">
+      <button id="editNoteCancel">取消</button>
+      <button class="note-save" id="editNoteSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
 
 <!-- Share card overlay -->
 <div class="share-overlay" id="shareOverlay">
@@ -570,6 +710,14 @@ function resolveWikiLink(name){
 }
 // Convert [[wiki links]] in markdown text before marked parses it
 function convertWikiLinks(md){
+  // Protect checkbox syntax: [ ], [x], [X] — replace with placeholders before wiki link processing
+  const _cbPlaceholders=[];
+  md=md.replace(/^(\s*[-*+]\s+|\s*\d+\.\s+)?\[([ xX])\]/gm, function(match,prefix,check){
+    const idx=_cbPlaceholders.length;
+    const checked=check.toLowerCase()==='x';
+    _cbPlaceholders.push({match,checked,prefix:prefix||''});
+    return (prefix||'')+'%%CB_'+idx+'%%';
+  });
   // First: convert ![[image]] embeds to standard markdown images
   md=md.replace(/!\[\[([^\]]+?)(?:\|([^\]]*?))?\]\]/g, function(_,target,alt){
     const t=target.trim();
@@ -582,7 +730,7 @@ function convertWikiLinks(md){
     if(/\.(mp3|wav|ogg|m4a)$/i.test(t)){
       const encoded='/vault/'+t.split('/').map(s=>encodeURIComponent(s)).join('/');
       const label=(alt||t.split('/').pop().replace(/\.[^.]+$/,'')).trim();
-      return '<div class="audio-embed"><div class="audio-label">\ud83c\udfb5 '+label+'</div><audio controls preload="metadata" src="'+encoded+'"></audio></div>';
+      return '<div class="audio-embed" data-audio-path="'+t+'"><div class="audio-label">\ud83c\udfb5 '+label+'</div><audio controls preload="metadata" src="'+encoded+'"></audio><div class="audio-embed-actions"><button class="audio-sub-btn" data-audio-src="'+encoded+'" data-audio-rel="'+t+'">\ud83d\udd24 字幕跟读</button></div></div>';
     }
     // Video embed → <video> player
     if(/\.(mp4|webm)$/i.test(t)){
@@ -593,7 +741,7 @@ function convertWikiLinks(md){
     return '[['+target+(alt?'|'+alt:'')+']]';
   });
   // Then: convert [[wiki links]] to HTML
-  return md.replace(/\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g, function(_,target,alias){
+  md=md.replace(/\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g, function(_,target,alias){
     const display=alias||target;
     const aid=resolveWikiLink(target);
     if(aid){
@@ -601,6 +749,13 @@ function convertWikiLinks(md){
     }
     return '<span class="wl wl-broken" title="未找到: '+h(target)+'">'+h(display)+'</span>';
   });
+  // Restore checkbox placeholders to proper HTML checkboxes
+  md=md.replace(/%%CB_(\d+)%%/g, function(_,idx){
+    const cb=_cbPlaceholders[parseInt(idx)];
+    if(!cb)return _;
+    return '<input type="checkbox" disabled'+(cb.checked?' checked':'')+' style="margin-right:6px;vertical-align:middle;pointer-events:none">';
+  });
+  return md;
 }
 
 // ── Strip frontmatter ────────────────────────────────
@@ -668,6 +823,7 @@ function applyCatalog(data){
   C=data;
   _wikiIndex=null;
   renderSidebar(C,document.querySelector('.sf')?.value||'');
+  restoreSidebarState();
   const ftSpan=sft.querySelector('span');
   ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
   ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
@@ -729,64 +885,147 @@ function renderSidebar(cat,filter){
     sections[a.category]=sections[a.category]||[];
     sections[a.category].push(a);
   }
+
+  // Build a tree from subcategory paths (supports arbitrary depth)
+  function buildTree(articles){
+    const root={children:{},articles:[]};
+    for(const a of articles){
+      if(!a.subcategory){root.articles.push(a);continue;}
+      const parts=a.subcategory.split('/');
+      let node=root;
+      for(const p of parts){
+        if(!node.children[p])node.children[p]={children:{},articles:[]};
+        node=node.children[p];
+      }
+      node.articles.push(a);
+    }
+    return root;
+  }
+
+  // Count all articles in a tree node (recursive)
+  function countAll(node){
+    let n=node.articles.length;
+    for(const k of Object.keys(node.children))n+=countAll(node.children[k]);
+    return n;
+  }
+
+  // Render tree recursively
+  function renderTree(node,prefix,depth){
+    let html='';
+    const padLeft=26+depth*12;
+    const artPadLeft=padLeft+8;
+    const fontSize=depth>0?'11':'12';
+    // Render articles at this level
+    for(const a of node.articles){
+      const act=a.id===curId?' active':'';
+      const rd=readSet.has(a.id);
+      html+='<div class="ai'+(rd?' read':'')+act+'" style="padding-left:'+artPadLeft+'px" data-id="'+ha(a.id)+'" title="'+ha(a.title)+'">';
+      html+='<span class="at">'+h(a.title)+'</span>';
+      if(rd)html+='<span class="rd">\u2713</span>';
+      html+='</div>';
+    }
+    // Render child directories sorted
+    const childKeys=Object.keys(node.children).sort();
+    for(const ck of childKeys){
+      const child=node.children[ck];
+      const total=countAll(child);
+      const id=hsh(prefix+'/'+ck);
+      const isOpen=!!fl;
+      html+='<div class="sh'+(isOpen?' open':'')+'" data-t="'+id+'" style="padding-left:'+padLeft+'px;font-size:'+fontSize+'px">';
+      html+='<span class="arr">\u25b6</span>'+h(ck)+' <span style="color:var(--text-3);font-weight:400">('+total+')</span></div>';
+      html+='<div class="si-items'+(isOpen?' open':'')+'" id="'+id+'">';
+      html+=renderTree(child,prefix+'/'+ck,depth+1);
+      html+='</div>';
+    }
+    return html;
+  }
+
   const secOrder=['\ud83d\udcc2 Raw','\ud83d\udcda Wiki'];
   for(const sec of secOrder){
     const arts=sections[sec];if(!arts||!arts.length)continue;
     const secId=hsh(sec);
-    // Level 1: always open
-    out+='<div class="cg"><div class="ch open" data-t="'+secId+'"><span><span class="arr">▶</span>'+h(sec)+'</span><span class="cnt">'+arts.length+'</span></div><div class="ci open" id="'+secId+'">';
-    const sg={},ns=[];
-    for(const a of arts){if(a.subcategory){if(!sg[a.subcategory])sg[a.subcategory]=[];sg[a.subcategory].push(a)}else ns.push(a)}
-    for(const a of ns){out+=artItem(a,false,readSet)}
-    const sk=Object.keys(sg).sort();
-    const topSubs={};
-    for(const s of sk){
-      const p=s.split('/');const t=p[0];
-      if(!topSubs[t])topSubs[t]=[];
-      topSubs[t].push({key:s,sub:p.length>1?p.slice(1).join('/'):null,arts:sg[s]});
-    }
-    const tsk=Object.keys(topSubs).sort();
-    for(const t of tsk){
-      const items=topSubs[t];
-      const totalInTop=items.reduce((n,i)=>n+i.arts.length,0);
-      const tid=hsh(sec+t);
-      // Level 2: collapsed by default
-      out+='<div class="sh" data-t="'+tid+'"><span class="arr">▶</span>'+h(t)+' <span style="color:var(--text-3);font-weight:400">('+totalInTop+')</span></div><div class="si-items" id="'+tid+'">';
-      if(items.length===1&&!items[0].sub){
-        for(const a of items[0].arts)out+=artItem(a,true,readSet);
-      }else{
-        for(const item of items){
-          if(item.sub){
-            const sid=hsh(sec+item.key);
-            const sopen=!!fl;
-            out+='<div class="sh'+(sopen?' open':'')+'" data-t="'+sid+'" style="padding-left:38px;font-size:11px"><span class="arr">▶</span>'+h(item.sub)+' ('+item.arts.length+')</div><div class="si-items'+(sopen?' open':'')+'" id="'+sid+'">';
-            for(const a of item.arts)out+=artItem(a,true,readSet);
-            out+='</div>';
-          }else{
-            for(const a of item.arts)out+=artItem(a,true,readSet);
-          }
-        }
-      }
-      out+='</div>';
-    }
+    out+='<div class="cg"><div class="ch open" data-t="'+secId+'"><span><span class="arr">\u25b6</span>'+h(sec)+'</span><span class="cnt">'+arts.length+'</span></div><div class="ci open" id="'+secId+'">';
+    const tree=buildTree(arts);
+    out+=renderTree(tree,sec,0);
     out+='</div></div>';
   }
-  if(!out)out='<div class="ld">无匹配结果</div>';
+  if(!out)out='<div class="ld">\u65e0\u5339\u914d\u7ed3\u679c</div>';
   snav.innerHTML=out;
 }
 
 function artItem(a,sub,readSet){
   const act=a.id===curId?' active':'';
   const rd=readSet.has(a.id);
-  return '<div class="ai'+(sub?' sub':'')+(rd?' read':'')+act+'" data-id="'+ha(a.id)+'" title="'+ha(a.title)+'"><span class="at">'+h(a.title)+'</span>'+(rd?'<span class="rd">✓</span>':'')+'</div>';
+  return '<div class="ai'+(sub?' sub':'')+(rd?' read':'')+act+'" data-id="'+ha(a.id)+'" title="'+ha(a.title)+'"><span class="at">'+h(a.title)+'</span>'+(rd?'<span class="rd">\u2713</span>':'')+'</div>';
+}
+
+// ── Get prev/next articles in same category ─────────
+function getNavSiblings(id){
+  if(!C||!C.articles)return{prev:null,next:null};
+  const cur=C.articles.find(a=>a.id===id);
+  if(!cur)return{prev:null,next:null};
+  const sameCat=C.articles.filter(a=>a.category===cur.category);
+  const idx=sameCat.findIndex(a=>a.id===id);
+  return{
+    prev:idx>0?sameCat[idx-1]:null,
+    next:idx<sameCat.length-1?sameCat[idx+1]:null
+  };
+}
+
+// ── Expand sidebar to a specific category/subcategory ──
+function expandSidebarTo(key,type){
+  // On mobile, open sidebar first
+  if(window.innerWidth<=1024) openSide();
+  // For category: key is the category name like '📂 Raw', toggle its .ch
+  // For sub: key is like '📂 Raw/某平台课程/决策的54个基本'
+  const targetId=hsh(key);
+  const targetEl=document.getElementById(targetId);
+  if(!targetEl)return;
+  // Ensure all ancestors are open
+  // Walk up from the key, opening each parent
+  if(type==='sub'){
+    const parts=key.split('/');
+    // parts[0] is the category, rest are subcategory levels
+    // Open category first
+    const catId=hsh(parts[0]);
+    const catContainer=document.getElementById(catId);
+    const catHeader=document.querySelector('.ch[data-t="'+catId+'"]');
+    if(catContainer&&!catContainer.classList.contains('open')){
+      catContainer.classList.add('open');
+      if(catHeader)catHeader.classList.add('open');
+    }
+    // Open each subcategory level
+    for(let i=1;i<parts.length;i++){
+      const subKey=parts.slice(0,i+1).join('/');
+      const subId=hsh(subKey);
+      const subContainer=document.getElementById(subId);
+      const subHeader=document.querySelector('.sh[data-t="'+subId+'"]');
+      if(subContainer&&!subContainer.classList.contains('open')){
+        subContainer.classList.add('open');
+        if(subHeader)subHeader.classList.add('open');
+      }
+    }
+  }else{
+    // Category: just open it
+    const catHeader=document.querySelector('.ch[data-t="'+targetId+'"]');
+    if(!targetEl.classList.contains('open')){
+      targetEl.classList.add('open');
+      if(catHeader)catHeader.classList.add('open');
+    }
+  }
+  // Scroll sidebar to show the target
+  const header=document.querySelector('.sh[data-t="'+targetId+'"]')||document.querySelector('.ch[data-t="'+targetId+'"]');
+  if(header)header.scrollIntoView({behavior:'smooth',block:'center'});
+  saveSidebarState();
 }
 
 // ── Load article (fetch raw markdown, render in browser) ─
 async function loadArticle(id){
   if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];}
+  if(typeof InlineAudio!=='undefined'){for(const k of InlineAudio.active.keys())InlineAudio.deactivate(k);}
   ct.innerHTML='<div class="ld"><div class="sp"></div><div>加载中...</div></div>';
   try{
-    const r=await fetch('/vault/'+encodeURI(id),{cache:'no-store'});
+    const r=await fetch('/vault/'+id.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
     if(!r.ok)throw new Error(r.status);
     const mdText=await r.text();
     const {meta,body}=stripFrontmatter(mdText);
@@ -794,8 +1033,46 @@ async function loadArticle(id){
     const title=artInfo?artInfo.title:(meta.title||id.split('/').pop().replace('.md',''));
     const catName=artInfo?artInfo.category:'';
     curId=id;
+    editMode=false;
     location.hash=encodeURIComponent(id);
-    bc.textContent=(catName?catName+' › ':'')+title;
+    // Build clickable breadcrumb
+    bc.innerHTML='';
+    const bcParts=[];
+    if(catName)bcParts.push({label:catName,type:'cat',key:catName});
+    if(artInfo&&artInfo.subcategory){
+      const subParts=artInfo.subcategory.split('/');
+      let subPath=catName;
+      for(const sp of subParts){
+        subPath+='/'+sp;
+        bcParts.push({label:sp,type:'sub',key:subPath});
+      }
+    }
+    bcParts.push({label:title,type:'leaf'});
+    bcParts.forEach((p,i)=>{
+      if(i>0){
+        const sep=document.createElement('span');
+        sep.className='bc-sep';
+        sep.textContent='›';
+        bc.appendChild(sep);
+      }
+      const span=document.createElement('span');
+      if(p.type==='leaf'){
+        span.className='bc-leaf';
+        span.textContent=p.label;
+      }else{
+        span.className='bc-seg';
+        span.textContent=p.label;
+        span.addEventListener('click',()=>expandSidebarTo(p.key,p.type));
+      }
+      bc.appendChild(span);
+    });
+    // Show edit button for .md files
+    if(typeof editToggle!=='undefined'){
+      editToggle.style.display=id.toLowerCase().endsWith('.md')?'':'none';
+      editToggle.textContent='📝';
+      editToggle.title='编辑';
+      editToggle.classList.remove('active');
+    }
     let metaHtml='';
     const am=artInfo?artInfo.meta:meta;
     if(am.author)metaHtml+='<span class="author">'+h(String(am.author))+'</span>';
@@ -804,7 +1081,7 @@ async function loadArticle(id){
     if(tags&&Array.isArray(tags))for(const t of tags)metaHtml+='<span class="tag">'+h(String(t))+'</span>';
     const wikiBody=convertWikiLinks(body);
     // Resolve relative image paths to vault directory (with _assets fallback)
-    const artDir='/vault/'+encodeURI(id.replace(/\/[^\/]+$/,''))+'/';
+    const artDir='/vault/'+id.replace(/\/[^\/]+$/,'').split('/').map(s=>encodeURIComponent(s)).join('/')+'/';
     const artBasename=id.split('/').pop().replace(/\.md$/i,'');
     const renderer=new marked.Renderer();
     renderer.image=function({href,title,text}){
@@ -818,19 +1095,45 @@ async function loadArticle(id){
       const t=title?' title="'+ha(title)+'"':'';
       return '<img src="'+src+'" alt="'+ha(alt)+'"'+t+' loading="lazy">';
     };
+    renderer.link=function({href,title,text}){
+      const url=href||'';
+      const t=title?' title="'+ha(title)+'"':'';
+      // External links (http/https) open in new tab
+      if(url.match(/^https?:\/\//i)){
+        return '<a href="'+ha(url)+'"'+t+' target="_blank" rel="noopener noreferrer">'+text+'</a>';
+      }
+      return '<a href="'+ha(url)+'"'+t+'>'+text+'</a>';
+    };
     const htmlContent=marked.parse(wikiBody,{renderer});
     const rd=isRead(id);
     const rdLabel=rd?'\u2713 \u5df2\u8bfb':'\u25cb \u6807\u8bb0\u5df2\u8bfb';
     const rdCls='read-toggle'+(rd?' is-read':'');
     const rdBtn='<button class="'+rdCls+'">'+rdLabel+'</button>';
-    ct.innerHTML='<div class="article"><div class="art-hd"><h1>'+h(title)+'</h1>'+(metaHtml?'<div class="art-meta">'+metaHtml+'</div>':'')+'<div class="art-actions">'+rdBtn+'</div></div><div class="art-body">'+htmlContent+'</div><div class="art-ft">'+rdBtn+'</div></div>';
+    // Build prev/next nav buttons
+    const nav=getNavSiblings(id);
+    let navHtml='';
+    if(nav.prev)navHtml+='<button class="nav-btn" data-nav="'+ha(nav.prev.id)+'">⏮ '+h(nav.prev.title)+'</button>';
+    if(nav.next)navHtml+='<button class="nav-btn" data-nav="'+ha(nav.next.id)+'">'+h(nav.next.title)+' ⏭</button>';
+    ct.innerHTML='<div class="article"><div class="art-hd"><h1>'+h(title)+'</h1>'+(metaHtml?'<div class="art-meta">'+metaHtml+'</div>':'')+'<div class="art-actions">'+rdBtn+'</div></div><div class="art-body">'+htmlContent+'</div><div class="art-ft">'+rdBtn+navHtml+'</div></div>';
     ct.scrollTop=0;
     // Bind read-toggle buttons
     ct.querySelectorAll('.read-toggle').forEach(btn=>btn.addEventListener('click',()=>toggleRead(id)));
+    // Bind prev/next nav buttons
+    ct.querySelectorAll('.nav-btn[data-nav]').forEach(btn=>btn.addEventListener('click',function(){loadArticle(this.dataset.nav)}));
     // Bind wiki links
     ct.querySelectorAll('a.wl[data-wl]').forEach(a=>a.addEventListener('click',function(e){
       e.preventDefault();
-      loadArticle(this.dataset.wl);
+      const targetId=this.dataset.wl;
+      // Check if this wiki link is from a 笔记.md source line (—— [[title]])
+      // Try to find the associated quote from a preceding blockquote
+      const quoteText=findQuoteForWikiLink(this);
+      if(quoteText){
+        const hlParam=encodeURIComponent(quoteText.slice(0,40));
+        location.hash=encodeURIComponent(targetId)+'?highlight='+hlParam;
+        loadArticle(targetId);
+      }else{
+        loadArticle(targetId);
+      }
     }));
     // Update sidebar active
     document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
@@ -838,6 +1141,17 @@ async function loadArticle(id){
     if(el){
       el.classList.add('active');
       el.scrollIntoView({block:'nearest'});
+    }
+    // Load annotations (highlights + notes from 笔记.md)
+    loadAnnotations(id);
+    // Check for highlight jump parameter in hash
+    const hashParts=location.hash.split('?');
+    if(hashParts.length>1){
+      const params=new URLSearchParams(hashParts.slice(1).join('?'));
+      const hlText=params.get('highlight');
+      if(hlText){
+        setTimeout(()=>scrollToHighlight(decodeURIComponent(hlText)),500);
+      }
     }
     closeSide();
   }catch(e){
@@ -847,12 +1161,39 @@ async function loadArticle(id){
 }
 
 // ── Event: sidebar clicks ────────────────────────────
+function saveSidebarState(){
+  const opened=[];
+  snav.querySelectorAll('.ch.open,.sh.open').forEach(el=>{
+    if(el.dataset.t)opened.push(el.dataset.t);
+  });
+  try{localStorage.setItem('sidebar-open',JSON.stringify(opened))}catch(e){}
+}
+function restoreSidebarState(){
+  try{
+    const saved=JSON.parse(localStorage.getItem('sidebar-open')||'[]');
+    if(!saved.length)return;
+    const openSet=new Set(saved);
+    snav.querySelectorAll('.ch,.sh').forEach(el=>{
+      if(el.dataset.t&&openSet.has(el.dataset.t)){
+        el.classList.add('open');
+        const t=document.getElementById(el.dataset.t);
+        if(t)t.classList.add('open');
+      }else if(el.dataset.t&&!openSet.has(el.dataset.t)){
+        el.classList.remove('open');
+        const t=document.getElementById(el.dataset.t);
+        if(t)t.classList.remove('open');
+      }
+    });
+  }catch(e){}
+}
+
 snav.addEventListener('click',function(e){
   const ch=e.target.closest('.ch,.sh');
   if(ch){
     ch.classList.toggle('open');
     const t=document.getElementById(ch.dataset.t);
     if(t)t.classList.toggle('open');
+    saveSidebarState();
     return;
   }
   const ai=e.target.closest('.ai');
@@ -934,13 +1275,37 @@ search.addEventListener('input',function(){
   searchTimer=setTimeout(()=>{if(C)renderSidebar(C,search.value.trim())},200);
 });
 
-// ── Theme toggle ─────────────────────────────────────
-thm.addEventListener('click',function(){
-  dark=!dark;
-  document.body.classList.toggle('dark',dark);
-  thm.textContent=dark?'☀️':'🌙';
-  try{localStorage.setItem('theme',dark?'dark':'light')}catch(e){}
+// ── Theme toggle (multi-theme with panel) ────────────
+const themePanel=$('themePanel');
+let curAppTheme='light';
+const themeIcons={light:'🌙',dark:'☀️','eye-care':'🌿'};
+function applyTheme(theme){
+  curAppTheme=theme;
+  document.body.classList.remove('dark','eye-care');
+  if(theme==='dark')document.body.classList.add('dark');
+  else if(theme==='eye-care')document.body.classList.add('eye-care');
+  dark=(theme==='dark');
+  thm.textContent=themeIcons[theme]||'🌙';
+  themePanel.querySelectorAll('.theme-panel-item').forEach(el=>{
+    el.classList.toggle('active',el.dataset.theme===theme);
+  });
+  try{localStorage.setItem('theme',theme)}catch(e){}
+}
+thm.addEventListener('click',function(e){
+  e.stopPropagation();
+  themePanel.classList.toggle('on');
 });
+themePanel.addEventListener('click',function(e){
+  const item=e.target.closest('.theme-panel-item');
+  if(!item)return;
+  e.stopPropagation();
+  applyTheme(item.dataset.theme);
+  themePanel.classList.remove('on');
+});
+document.addEventListener('click',function(){
+  themePanel.classList.remove('on');
+});
+
 
 // ── Font size ────────────────────────────────────────
 function setFs(v){
@@ -957,6 +1322,20 @@ function openSide(){side.classList.add('open');ov.classList.add('on')}
 function closeSide(){side.classList.remove('open');ov.classList.remove('on')}
 ham.addEventListener('click',openSide);
 ov.addEventListener('click',closeSide);
+
+// ── Logo click → go home ─────────────────────────────
+document.querySelector('.side-brand').addEventListener('click',function(){
+  if(typeof TTS!=='undefined')TTS.stop();
+  curId=null;
+  editMode=false;
+  if(typeof editToggle!=='undefined')editToggle.style.display='none';
+  location.hash='';
+  bc.innerHTML='';
+  document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
+  ct.innerHTML='<div class="welcome" id="wc"><div class="ico">📖</div><h2>知识库阅读器</h2><p>你的个人知识库，某平台网页版阅读体验。<br>从左侧选择一篇文章开始阅读。</p><div class="stats" id="ws"></div></div>';
+  if(C){document.getElementById('ws').innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';}
+  closeSide();
+});
 
 // ── Back to top ──────────────────────────────────────
 ct.addEventListener('scroll',function(){
@@ -980,7 +1359,7 @@ window.addEventListener('hashchange',function(){
 
 // ── Restore prefs ────────────────────────────────────
 try{
-  if(localStorage.getItem('theme')==='dark'){dark=true;document.body.classList.add('dark');thm.textContent='☀️'}
+  var savedTheme=localStorage.getItem('theme')||'light';if(savedTheme!=='light')applyTheme(savedTheme);
   const sf=parseInt(localStorage.getItem('fs'));if(sf)setFs(sf);
 }catch(e){}
 
@@ -1009,6 +1388,12 @@ function showShareBarIfSelected(){
   const text=sel.toString().trim();
   if(text.length<2){shareBar.classList.remove('vis');return;}
   selectedText=text;
+  // Update TTS/MP3 button label based on active inline audio
+  if(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0){
+    shareTtsPlay.textContent='🎵 从此处听(MP3)';
+  }else{
+    shareTtsPlay.textContent='🎧 从此处听';
+  }
   // Position bar below the selection (avoids fighting with system menu above)
   const range=sel.getRangeAt(0);
   const rect=range.getBoundingClientRect();
@@ -1045,7 +1430,7 @@ document.addEventListener('touchcancel',function(){
 },{passive:true});
 
 // Hide share bar on scroll
-ct.addEventListener('scroll',()=>shareBar.classList.remove('vis'));
+ct.addEventListener('scroll',()=>{shareBar.classList.remove('vis');hideAnnActions();});
 
 // Theme switcher
 const shareThemes=$('shareThemes');
@@ -1072,9 +1457,16 @@ shareTtsPlay.addEventListener('click',function(e){
   _shareBarLock=false;
   const text=selectedText; // capture before clearing
   if(!text){console.log('[tts] shareTtsPlay: no selectedText');return;}
-  console.log('[tts] shareTtsPlay clicked, text:',text.slice(0,30));
   shareBar.classList.remove('vis');
   window.getSelection().removeAllRanges();
+  // If inline audio follow-along is active, seek in MP3 instead of TTS
+  if(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0){
+    console.log('[inline-audio] shareTtsPlay → seekToText, text:',text.slice(0,30));
+    if(InlineAudio.seekToText(text))return;
+    // If seek failed (no matching segment), fall through to TTS
+    console.log('[inline-audio] seekToText failed, falling back to TTS');
+  }
+  console.log('[tts] shareTtsPlay clicked, text:',text.slice(0,30));
   TTS.playFromText(text);
 });
 
@@ -1149,11 +1541,426 @@ saSave.addEventListener('click',function(){
   });
 });
 
+// ── Toast helper ───────────────────────────
+const toastEl=$('toast');
+let _toastTimer=null;
+function showToast(msg,dur){
+  toastEl.textContent=msg;
+  toastEl.classList.add('vis');
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>toastEl.classList.remove('vis'),dur||2000);
+}
+
+// ── 划线笔记 ───────────────────────────────────
+const shareNote=$('shareNote');
+const noteOverlay=$('noteOverlay'),noteQuote=$('noteQuote'),noteTextarea=$('noteText');
+const noteSave=$('noteSave'),noteCancel=$('noteCancel');
+let _noteQuoteText='';
+
+shareNote.addEventListener('mousedown',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);});
+shareNote.addEventListener('touchstart',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);},{passive:true});
+shareNote.addEventListener('click',function(e){
+  e.stopPropagation();
+  _shareBarLock=false;
+  if(!selectedText)return;
+  _noteQuoteText=selectedText;
+  noteQuote.textContent=_noteQuoteText;
+  noteTextarea.value='';
+  noteOverlay.classList.add('on');
+  shareBar.classList.remove('vis');
+  window.getSelection().removeAllRanges();
+  setTimeout(()=>noteTextarea.focus(),100);
+});
+
+// ── 🖍️ 划线功能（纯划线，不弹模态框）─────
+const shareHighlight=$('shareHighlight');
+shareHighlight.addEventListener('mousedown',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);});
+shareHighlight.addEventListener('touchstart',function(e){_shareBarLock=true;setTimeout(()=>{_shareBarLock=false;},1000);},{passive:true});
+shareHighlight.addEventListener('click',async function(e){
+  e.stopPropagation();
+  _shareBarLock=false;
+  if(!selectedText||!curId)return;
+  shareBar.classList.remove('vis');
+  const quoteText=selectedText;
+  window.getSelection().removeAllRanges();
+  try{
+    const r=await fetch('/api/note',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({articleId:curId,quote:quoteText,note:''})
+    });
+    const d=await r.json();
+    if(d.ok){
+      showToast('已划线 ✓');
+      // Reload annotations
+      loadAnnotations(curId);
+    }else{
+      showToast('❤ 划线失败: '+(d.error||''),3000);
+    }
+  }catch(ex){
+    showToast('❤ 请求失败',3000);
+  }
+});
+
+noteCancel.addEventListener('click',()=>noteOverlay.classList.remove('on'));
+noteOverlay.addEventListener('click',e=>{if(e.target===noteOverlay)noteOverlay.classList.remove('on')});
+
+noteSave.addEventListener('click',async function(){
+  if(!_noteQuoteText||!curId)return;
+  noteSave.textContent='保存中...';
+  noteSave.disabled=true;
+  try{
+    const r=await fetch('/api/note',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({articleId:curId,quote:_noteQuoteText,note:noteTextarea.value})
+    });
+    const d=await r.json();
+    if(d.ok){
+      noteOverlay.classList.remove('on');
+      showToast('✅ 笔记已保存');
+      // Reload annotations to show new note in article
+      loadAnnotations(curId);
+    }else{
+      showToast('❌ 保存失败: '+(d.error||''),3000);
+    }
+  }catch(e){
+    showToast('❌ 请求失败',3000);
+  }finally{
+    noteSave.textContent='保存';
+    noteSave.disabled=false;
+  }
+});
+
+// ── 注释标注系统（划线 + 笔记 显示在原文中）─────
+const annTooltip=$('annTooltip');
+let _annTooltipTimer=null;
+
+// Load annotations for current article and highlight in .art-body
+async function loadAnnotations(articleId){
+  if(!articleId)return;
+  // Clear existing annotations
+  const body=document.querySelector('.art-body');
+  if(!body)return;
+  // Remove old marks
+  body.querySelectorAll('mark.ann-hl,mark.ann-note').forEach(m=>{
+    const parent=m.parentNode;
+    while(m.firstChild)parent.insertBefore(m.firstChild,m);
+    parent.removeChild(m);
+    parent.normalize();
+  });
+  try{
+    const r=await fetch('/api/notes?articleId='+encodeURIComponent(articleId));
+    const d=await r.json();
+    if(!d.ok||!d.notes||!d.notes.length)return;
+    // For each note entry, find and wrap matching text
+    for(const entry of d.notes){
+      highlightInBody(body,entry);
+    }
+  }catch(e){
+    console.error('[annotations] load failed:',e);
+  }
+}
+
+function highlightInBody(body,entry){
+  const quote=entry.quote.trim();
+  if(!quote)return;
+  const hasNote=!!entry.note;
+  // Walk text nodes to find the quote
+  const tw=document.createTreeWalker(body,NodeFilter.SHOW_TEXT,null);
+  // Build full text and track node positions
+  const textNodes=[];
+  const textParts=[];
+  let fullText='';
+  while(tw.nextNode()){
+    const node=tw.currentNode;
+    // Skip nodes inside existing marks
+    if(node.parentElement&&node.parentElement.closest('mark.ann-hl,mark.ann-note'))continue;
+    textNodes.push(node);
+    textParts.push({node,start:fullText.length,end:fullText.length+node.textContent.length});
+    fullText+=node.textContent;
+  }
+  // Find quote in fullText (try exact match, then normalized)
+  let matchStart=fullText.indexOf(quote);
+  if(matchStart<0){
+    // Try with normalized whitespace
+    const normFull=fullText.replace(/\s+/g,' ');
+    const normQuote=quote.replace(/\s+/g,' ');
+    const normPos=normFull.indexOf(normQuote);
+    if(normPos>=0){
+      // Map back to original positions (approximate)
+      matchStart=normPos;
+    }
+  }
+  if(matchStart<0)return;
+  const matchEnd=matchStart+quote.length;
+  // Find which text nodes are involved
+  const affectedNodes=[];
+  for(const tp of textParts){
+    if(tp.end<=matchStart)continue;
+    if(tp.start>=matchEnd)break;
+    affectedNodes.push({
+      node:tp.node,
+      nodeStart:tp.start,
+      hlStart:Math.max(matchStart,tp.start)-tp.start,
+      hlEnd:Math.min(matchEnd,tp.end)-tp.start
+    });
+  }
+  // Wrap each affected text node's portion in <mark>
+  const cls=hasNote?'ann-note':'ann-hl';
+  const tooltipData=encodeURIComponent(JSON.stringify({quote:entry.quote||'',note:entry.note||'',date:entry.date||''}));
+  for(const an of affectedNodes){
+    const node=an.node;
+    const text=node.textContent;
+    const before=text.slice(0,an.hlStart);
+    const matched=text.slice(an.hlStart,an.hlEnd);
+    const after=text.slice(an.hlEnd);
+    const parent=node.parentNode;
+    const frag=document.createDocumentFragment();
+    if(before)frag.appendChild(document.createTextNode(before));
+    const mark=document.createElement('mark');
+    mark.className=cls;
+    mark.setAttribute('data-ann',tooltipData);
+    mark.textContent=matched;
+    frag.appendChild(mark);
+    if(after)frag.appendChild(document.createTextNode(after));
+    parent.replaceChild(frag,node);
+  }
+}
+
+// Tooltip on hover
+document.addEventListener('mouseover',function(e){
+  const mark=e.target.closest('mark.ann-hl,mark.ann-note');
+  if(!mark)return;
+  const dataStr=mark.getAttribute('data-ann');
+  if(!dataStr)return;
+  try{
+    const data=JSON.parse(decodeURIComponent(dataStr));
+    let html='';
+    if(data.note)html+='<div class="ann-tt-note">'+h(data.note)+'</div>';
+    html+='<div class="ann-tt-date">'+(data.note?'📝 ':'🖍️ ')+(data.date||'划线')+'</div>';
+    annTooltip.innerHTML=html;
+    const rect=mark.getBoundingClientRect();
+    let left=rect.left+rect.width/2;
+    let top=rect.top-8;
+    // Position above the mark
+    annTooltip.style.left=left+'px';
+    annTooltip.style.top=top+'px';
+    annTooltip.style.transform='translateX(-50%) translateY(-100%)';
+    annTooltip.classList.add('vis');
+    // Adjust if off-screen
+    requestAnimationFrame(()=>{
+      const ttRect=annTooltip.getBoundingClientRect();
+      if(ttRect.top<4){
+        annTooltip.style.top=(rect.bottom+8)+'px';
+        annTooltip.style.transform='translateX(-50%) translateY(0)';
+      }
+      if(ttRect.left<4)annTooltip.style.left=(4+ttRect.width/2)+'px';
+      if(ttRect.right>window.innerWidth-4)annTooltip.style.left=(window.innerWidth-4-ttRect.width/2)+'px';
+    });
+  }catch(ex){}
+});
+document.addEventListener('mouseout',function(e){
+  const mark=e.target.closest('mark.ann-hl,mark.ann-note');
+  if(mark)annTooltip.classList.remove('vis');
+});
+
+// ── Annotation actions (click to delete/edit) ─────
+const annActions=$('annActions');
+const annActEdit=$('annActEdit');
+const annActDel=$('annActDel');
+const editNoteOverlay=$('editNoteOverlay');
+const editNoteQuote=$('editNoteQuote');
+const editNoteText=$('editNoteText');
+const editNoteSave=$('editNoteSave');
+const editNoteCancel=$('editNoteCancel');
+let _annActData=null; // {quote, note, date} for current action
+let _editingQuote=null; // preserved quote for edit modal
+
+function hideAnnActions(){annActions.classList.remove('vis');_annActData=null;}
+
+// Click on annotation marks → show actions panel
+document.addEventListener('click',function(e){
+  const mark=e.target.closest('mark.ann-hl,mark.ann-note');
+  if(!mark){
+    // Click outside: hide panel (unless clicking the panel itself)
+    if(!e.target.closest('.ann-actions'))hideAnnActions();
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  annTooltip.classList.remove('vis'); // hide tooltip
+  const dataStr=mark.getAttribute('data-ann');
+  if(!dataStr){hideAnnActions();return;}
+  try{
+    _annActData=JSON.parse(decodeURIComponent(dataStr));
+  }catch(ex){hideAnnActions();return;}
+  const hasNote=!!_annActData.note;
+  // Show/hide edit button based on whether it's a note or just a highlight
+  annActEdit.style.display=hasNote?'flex':'flex'; // always show edit
+  // Position the panel near the click
+  const rect=mark.getBoundingClientRect();
+  let left=rect.left+rect.width/2;
+  let top=rect.bottom+6;
+  annActions.style.left=left+'px';
+  annActions.style.top=top+'px';
+  annActions.classList.add('vis');
+  // Adjust if off-screen
+  requestAnimationFrame(()=>{
+    const pRect=annActions.getBoundingClientRect();
+    if(pRect.bottom>window.innerHeight-4){
+      annActions.style.top=(rect.top-6-pRect.height)+'px';
+    }
+    if(pRect.left<4)annActions.style.left=(4+pRect.width/2)+'px';
+    if(pRect.right>window.innerWidth-4)annActions.style.left=(window.innerWidth-4-pRect.width/2)+'px';
+  });
+});
+
+// Delete annotation
+annActDel.addEventListener('click',async function(e){
+  e.stopPropagation();
+  if(!_annActData||!_annActData.quote||!curId)return;
+  const savedQuote=_annActData.quote;
+  hideAnnActions();
+  try{
+    const r=await fetch('/api/note/delete',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({articleId:curId,quote:savedQuote})
+    });
+    const d=await r.json();
+    if(d.ok){
+      showToast('已删除 ✓');
+      loadAnnotations(curId);
+    }else{
+      showToast('❌ 删除失败: '+(d.error||''),3000);
+    }
+  }catch(ex){
+    showToast('❌ 请求失败',3000);
+  }
+});
+
+// Edit annotation → open edit modal
+annActEdit.addEventListener('click',function(e){
+  e.stopPropagation();
+  if(!_annActData||!_annActData.quote)return;
+  _editingQuote=_annActData.quote;
+  const savedNote=_annActData.note||'';
+  hideAnnActions();
+  editNoteQuote.textContent=_editingQuote;
+  editNoteText.value=savedNote;
+  editNoteOverlay.classList.add('on');
+  setTimeout(()=>editNoteText.focus(),100);
+});
+
+// Edit note modal — cancel
+editNoteCancel.addEventListener('click',()=>{
+  editNoteOverlay.classList.remove('on');
+  _annActData=null;
+});
+editNoteOverlay.addEventListener('click',e=>{
+  if(e.target===editNoteOverlay){editNoteOverlay.classList.remove('on');_annActData=null;}
+});
+
+// Edit note modal — save
+editNoteSave.addEventListener('click',async function(){
+  if(!_editingQuote||!curId)return;
+  editNoteSave.textContent='保存中...';
+  editNoteSave.disabled=true;
+  try{
+    const r=await fetch('/api/note/edit',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({articleId:curId,quote:_editingQuote,newNote:editNoteText.value})
+    });
+    const d=await r.json();
+    if(d.ok){
+      editNoteOverlay.classList.remove('on');
+      showToast('✅ 笔记已更新');
+      loadAnnotations(curId);
+    }else{
+      showToast('❌ 保存失败: '+(d.error||''),3000);
+    }
+  }catch(ex){
+    showToast('❌ 请求失败',3000);
+  }finally{
+    editNoteSave.textContent='保存';
+    editNoteSave.disabled=false;
+    _editingQuote=null;
+  }
+});
+
+// Find quote text associated with a wiki link in 笔记.md
+function findQuoteForWikiLink(linkEl){
+  let node=linkEl.closest('p,em,strong,h2');
+  if(!node)node=linkEl.parentElement;
+  const parentText=(node?node.textContent:'');
+
+  // New format: wiki link is inside ## [[title]] heading
+  // In this case, clicking the heading link should navigate to the article (no specific quote)
+  if(node&&node.tagName==='H2'){
+    return null; // heading-level link — just navigate to the article, no quote highlight
+  }
+
+  // Old format: *—— [[title]]，date* source line
+  if(!parentText.includes('——'))return null;
+  // Walk backwards from this element to find the nearest blockquote
+  let prev=node;
+  let limit=10;
+  while(prev&&limit-->0){
+    prev=prev.previousElementSibling;
+    if(!prev)break;
+    if(prev.tagName==='BLOCKQUOTE'){
+      return prev.textContent.trim();
+    }
+    // Skip <p> tags that might be note content
+    if(prev.tagName==='HR')break; // went too far back
+  }
+  return null;
+}
+
+// ── 从笔记.md 链接跳转到文字位置 ─────
+function scrollToHighlight(searchText){
+  if(!searchText)return;
+  const body=document.querySelector('.art-body');
+  if(!body)return;
+  // First try to find in existing annotation marks
+  const marks=body.querySelectorAll('mark.ann-hl,mark.ann-note');
+  for(const m of marks){
+    if(m.textContent.includes(searchText.slice(0,15))){
+      m.scrollIntoView({behavior:'smooth',block:'center'});
+      m.classList.add('ann-flash');
+      setTimeout(()=>m.classList.remove('ann-flash'),3000);
+      return;
+    }
+  }
+  // Fallback: search in full text
+  const tw=document.createTreeWalker(body,NodeFilter.SHOW_TEXT,null);
+  while(tw.nextNode()){
+    const node=tw.currentNode;
+    const idx=node.textContent.indexOf(searchText.slice(0,20));
+    if(idx>=0){
+      // Wrap the found text in a temporary highlight
+      const range=document.createRange();
+      range.setStart(node,idx);
+      range.setEnd(node,Math.min(idx+searchText.length,node.textContent.length));
+      const mark=document.createElement('mark');
+      mark.className='ann-hl ann-flash';
+      range.surroundContents(mark);
+      mark.scrollIntoView({behavior:'smooth',block:'center'});
+      setTimeout(()=>{
+        mark.classList.remove('ann-flash');
+      },3000);
+      return;
+    }
+  }
+}
+
 // ── TTS 听书（Edge TTS）─────────────────────────────────
 const ttsToggle=$('ttsToggle'),ttsBar=$('ttsBar');
 const ttsPlay=$('ttsPlay'),ttsStop=$('ttsStop');
 const ttsProgress=$('ttsProgress'),ttsProgressFill=$('ttsProgressFill');
-const ttsInfo=$('ttsInfo'),ttsSpeedBtn=$('ttsSpeed');
+const ttsInfo=$('ttsInfo'),ttsSpeedSel=$('ttsSpeed');
 
 const TTS={
   audio: null,
@@ -1163,7 +1970,7 @@ const TTS={
   playing: false,
   paused: false,
   speed: 1.0,
-  speeds: [0.8, 1.0, 1.2, 1.5, 2.0],
+  speeds: [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0],
   barVisible: false,
   generating: false,
   curCueIdx: -1,
@@ -1256,43 +2063,80 @@ const TTS={
     this.segMap=[];
     this._segTimeRanges=[];
     if(!this.cues.length||!this.segments.length){return;}
-    // Normalize text for comparison: lowercase, remove whitespace and common punctuation
-    const norm=s=>s.replace(/[\s\u3000.,;:!?\-\u2026\u201c\u201d\u2018\u2019\uff0c\u3002\uff01\uff1f\u3001\uff1b\uff1a\u300a\u300b\u3010\u3011()\[\]]/g,'').toLowerCase();
-    // Build normalized segment texts and track char offset ranges
-    const segNorms=[];
+    // Normalize: remove punctuation, whitespace, numbers; lowercase
+    const norm=s=>s.replace(/[\s\u3000.,;:!?\-\u2026\u201c\u201d\u2018\u2019\uff0c\u3002\uff01\uff1f\u3001\uff1b\uff1a\u300a\u300b\u3010\u3011()\[\]#\uff08\uff09\u2014\u2013\u200b]/g,'').replace(/\d+/g,'').toLowerCase();
+    // Character-level similarity with insertion/deletion tolerance
+    const charSim=(a,b)=>{
+      if(!a||!b)return 0;
+      const mx=Math.max(a.length,b.length);
+      if(!mx)return 0;
+      let matches=0,ai=0,bi=0;
+      while(ai<a.length&&bi<b.length){
+        if(a[ai]===b[bi]){matches++;ai++;bi++;}
+        else if(ai+1<a.length&&a[ai+1]===b[bi])ai++;
+        else if(bi+1<b.length&&a[ai]===b[bi+1])bi++;
+        else{ai++;bi++;}
+      }
+      return matches/mx;
+    };
+    // Build concatenated normalized segment text
+    const segRanges=[];
     let segFullNorm='';
-    const segRanges=[]; // [{start, end}] in segFullNorm
     for(let i=0;i<this.segments.length;i++){
       const n=norm(this.segments[i].text);
-      segNorms.push(n);
-      segRanges.push({start:segFullNorm.length, end:segFullNorm.length+n.length});
+      segRanges.push({start:segFullNorm.length,end:segFullNorm.length+n.length});
       segFullNorm+=n;
     }
-    // For each cue, find which segment it belongs to by scanning through
-    // the concatenated normalized segment text
-    let cursor=0; // current position in segFullNorm
-    for(let i=0;i<this.cues.length;i++){
-      const cueNorm=norm(this.cues[i].text);
-      if(!cueNorm){this.segMap.push(this.segMap.length?this.segMap[this.segMap.length-1]:0);continue;}
-      // Find cueNorm in segFullNorm starting from cursor
-      let pos=segFullNorm.indexOf(cueNorm,cursor);
-      if(pos<0)pos=segFullNorm.indexOf(cueNorm); // retry from start
-      if(pos>=0)cursor=pos+cueNorm.length;
-      // Which segment does pos fall into?
-      let sIdx=this.segMap.length?this.segMap[this.segMap.length-1]:0;
-      if(pos>=0){
-        for(let j=0;j<segRanges.length;j++){
-          if(pos<segRanges[j].end){sIdx=j;break;}
-        }
-      }
-      this.segMap.push(sIdx);
+    // Determine spoken range: exclude trailing summary/source sections
+    let lastSpokenSeg=this.segments.length-1;
+    for(let i=this.segments.length-1;i>=0;i--){
+      const t=this.segments[i].text.trim();
+      if(t.startsWith('源 PDF')||t==='---'||t.match(/^\d+\.\s/)||t==='## 划重点')lastSpokenSeg=i-1;
+      else break;
     }
-    // Now derive time ranges per segment from assigned cues
-    // segMap[cueIdx] = segIdx, cues[cueIdx].start/end = time
+    const spokenEnd=segRanges[lastSpokenSeg]?segRanges[lastSpokenSeg].end:segFullNorm.length;
+    const searchText=segFullNorm.substring(0,spokenEnd);
+    // Phase 1: Sequential fuzzy match each cue to a position in searchText
+    let cursor=0;
+    const cuePos=[];
+    for(let i=0;i<this.cues.length;i++){
+      const cn=norm(this.cues[i].text);
+      if(!cn||cn.length<1){cuePos.push({pos:cursor,score:0});continue;}
+      const maxLA=Math.max(200,cn.length*15);
+      const ss=Math.max(0,cursor-10);
+      const se=Math.min(searchText.length,cursor+maxLA);
+      // Try exact match first
+      let ep=searchText.indexOf(cn,ss);
+      if(ep>=0&&ep<se){cuePos.push({pos:ep,score:1});cursor=ep+cn.length;continue;}
+      // Fuzzy: slide window, score by charSim
+      let bp=-1,bs=0;
+      for(let p=ss;p<se;p++){
+        const we=Math.min(p+cn.length+3,searchText.length);
+        const w=searchText.substring(p,we);
+        const sc=charSim(cn,w);
+        if(sc>bs){bs=sc;bp=p;if(sc>=0.95)break;}
+      }
+      if(bs>=0.35&&bp>=0){cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,bp+cn.length);}
+      else cuePos.push({pos:cursor,score:0});
+    }
+    // Phase 2: Convert positions to segment indices
+    const posToSeg=pos=>{
+      for(let j=0;j<segRanges.length;j++){if(pos<segRanges[j].end)return j;}
+      return lastSpokenSeg;
+    };
+    const rawMap=cuePos.map(cp=>posToSeg(cp.pos));
+    // Phase 3: Enforce strict monotonicity
+    let cur=rawMap[0];
+    for(let i=0;i<rawMap.length;i++){
+      const r=rawMap[i];
+      if(r>cur){const jump=r-cur;if(jump<=3||cuePos[i].score>=0.5)cur=r;}
+      this.segMap.push(Math.min(cur,lastSpokenSeg));
+    }
+    // Derive time ranges per segment
     const segTimes=new Array(this.segments.length).fill(null);
     for(let i=0;i<this.segMap.length;i++){
       const si=this.segMap[i];
-      if(!segTimes[si])segTimes[si]={start:this.cues[i].start, end:this.cues[i].end};
+      if(!segTimes[si])segTimes[si]={start:this.cues[i].start,end:this.cues[i].end};
       else{
         segTimes[si].start=Math.min(segTimes[si].start,this.cues[i].start);
         segTimes[si].end=Math.max(segTimes[si].end,this.cues[i].end);
@@ -1303,7 +2147,7 @@ const TTS={
       if(!segTimes[i]){
         const prev=i>0&&segTimes[i-1]?segTimes[i-1].end:0;
         const next=segTimes.find((s,j)=>j>i&&s);
-        segTimes[i]={start:prev, end:next?next.start:prev+0.1};
+        segTimes[i]={start:prev,end:next?next.start:prev+0.1};
       }
     }
     this._segTimeRanges=segTimes;
@@ -1317,7 +2161,8 @@ const TTS={
     while(i<lines.length&&!lines[i].includes('-->')){i++;}
     while(i<lines.length){
       const line=lines[i];
-      const m=line.match(/(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})/);
+      // Support both HH:MM:SS.mmm and MM:SS.mmm timestamp formats
+      const m=line.match(/((?:\d{2}:)?\d{2}:\d{2}[.,]\d{3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}[.,]\d{3})/);
       if(m){
         const start=this.parseTime(m[1]);
         const end=this.parseTime(m[2]);
@@ -1337,6 +2182,7 @@ const TTS={
 
   parseTime(s){
     const p=s.replace(',','.').split(':');
+    if(p.length===2) return parseInt(p[0])*60+parseFloat(p[1]);
     const sec=parseFloat(p[2]);
     return parseInt(p[0])*3600+parseInt(p[1])*60+sec;
   },
@@ -1544,12 +2390,11 @@ const TTS={
     if(!this.audio||!this.audio.duration){
       if(!this.generating)ttsInfo.textContent='';
     }
-    ttsSpeedBtn.textContent=this.speed.toFixed(1)+'x';
+    ttsSpeedSel.value=String(this.speed);
   },
 
-  cycleSpeed(){
-    const idx=this.speeds.indexOf(this.speed);
-    this.speed=this.speeds[(idx+1)%this.speeds.length];
+  setSpeed(val){
+    this.speed=parseFloat(val)||1.0;
     if(this.audio)this.audio.playbackRate=this.speed;
     this.updateUI();
   },
@@ -1571,20 +2416,557 @@ ttsPlay.addEventListener('click',()=>{
   else TTS.play();
 });
 ttsStop.addEventListener('click',()=>TTS.stop());
-ttsSpeedBtn.addEventListener('click',()=>TTS.cycleSpeed());
+ttsSpeedSel.addEventListener('change',()=>TTS.setSpeed(ttsSpeedSel.value));
 ttsProgress.addEventListener('click',(e)=>{
   const rect=ttsProgress.getBoundingClientRect();
   const ratio=(e.clientX-rect.left)/rect.width;
   TTS.seekTo(Math.max(0,Math.min(1,ratio)));
 });
 
-// Click highlighted text to pause/resume TTS
+// Click highlighted text to pause/resume TTS or InlineAudio
 document.getElementById('ct').addEventListener('click',(e)=>{
   const hl=e.target.closest('.tts-highlight');
   if(!hl)return;
+  // Check if this is an InlineAudio highlight
+  if(hl.classList.contains('inline-audio-hl')){
+    // Find which InlineAudio session owns this element
+    for(const [src,s] of InlineAudio.active){
+      const idx=s.segments.findIndex(seg=>seg.el===hl);
+      if(idx>=0){
+        if(s.audio.paused) s.audio.play();
+        else s.audio.pause();
+        break;
+      }
+    }
+    return;
+  }
+  // Original TTS pause/resume
   if(TTS.generating)return;
   if(TTS.playing) TTS.pause();
   else if(TTS.paused) TTS.play();
+});
+
+// ── 内嵌 MP3 字幕跟读 ─────────────────────────
+const InlineAudio={
+  // Track active follow-along sessions: audioSrc -> {audio, cues, segments, segMap, segTimeRanges, btn, cleanup}
+  active: new Map(),
+
+  async toggleFollowAlong(btn){
+    const audioSrc=btn.dataset.audioSrc;
+    const audioRel=btn.dataset.audioRel;
+    // If already active, deactivate
+    if(this.active.has(audioSrc)){
+      this.deactivate(audioSrc);
+      return;
+    }
+    // Find the audio element in the same .audio-embed container
+    const embed=btn.closest('.audio-embed');
+    if(!embed)return;
+    const audio=embed.querySelector('audio');
+    if(!audio)return;
+    // Check if VTT exists / request transcription
+    btn.textContent='⏳ 检查字幕...';
+    btn.disabled=true;
+    try{
+      const vttUrl=await this.ensureVTT(audioRel,btn);
+      if(!vttUrl){
+        btn.textContent='🔤 字幕跟读';
+        btn.disabled=false;
+        return;
+      }
+      // Load VTT
+      const vttR=await fetch(vttUrl,{cache:'no-store'});
+      if(!vttR.ok)throw new Error('VTT load failed');
+      const vttText=await vttR.text();
+      const cues=TTS.parseVTT(vttText);
+      if(!cues.length){
+        showToast('字幕文件为空',2000);
+        btn.textContent='🔤 字幕跟读';
+        btn.disabled=false;
+        return;
+      }
+      // Build segments from article body
+      const segments=[];
+      const body=document.querySelector('.art-body');
+      if(body){
+        const blocks=body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote > p, td, th');
+        const seen=new Set();
+        for(const el of blocks){
+          if(seen.has(el))continue;
+          seen.add(el);
+          // Skip elements inside .audio-embed (UI, not article content)
+          if(el.closest('.audio-embed'))continue;
+          const text=el.innerText.trim();
+          if(text.length<1)continue;
+          segments.push({el,text});
+        }
+      }
+      // Build segment map using TTS's algorithm
+      const {segMap,segTimeRanges}=this.buildSegMap(cues,segments);
+      // Set up timeupdate listener
+      let curIdx=-1;
+      const onTimeUpdate=()=>{
+        const t=audio.currentTime;
+        let sIdx=-1;
+        for(let i=0;i<segTimeRanges.length;i++){
+          if(segTimeRanges[i]&&t>=segTimeRanges[i].start&&t<segTimeRanges[i].end){sIdx=i;break;}
+        }
+        if(sIdx<0&&segTimeRanges.length>0){
+          const last=segTimeRanges[segTimeRanges.length-1];
+          if(last&&t>=last.start)sIdx=segTimeRanges.length-1;
+        }
+        if(sIdx>=0&&sIdx!==curIdx){
+          curIdx=sIdx;
+          // Clear old highlights from this session
+          document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
+          if(segments[sIdx]&&segments[sIdx].el){
+            segments[sIdx].el.classList.add('tts-highlight','inline-audio-hl');
+            segments[sIdx].el.scrollIntoView({behavior:'smooth',block:'center'});
+          }
+        }
+      };
+      audio.addEventListener('timeupdate',onTimeUpdate);
+      // Sync pause/play state when user uses native audio controls
+      const onPlay=()=>{
+        document.querySelectorAll('.inline-audio-hl.inline-audio-paused').forEach(el=>el.classList.remove('inline-audio-paused'));
+        btn.textContent='⏹ 关闭跟读';
+      };
+      const onPause=()=>{
+        // Only show paused state if not ended and still active
+        if(!audio.ended&&this.active.has(audioSrc)){
+          document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.add('inline-audio-paused'));
+          btn.textContent='▶️ 继续播放';
+        }
+      };
+      audio.addEventListener('play',onPlay);
+      audio.addEventListener('pause',onPause);
+      // Cleanup when audio ends
+      const onEnded=()=>this.deactivate(audioSrc);
+      audio.addEventListener('ended',onEnded);
+      // Store state
+      this.active.set(audioSrc,{audio,cues,segments,segMap,segTimeRanges,btn,onTimeUpdate,onEnded,onPlay,onPause,curIdx});
+      btn.textContent='⏹ 关闭跟读';
+      btn.classList.add('active');
+      btn.disabled=false;
+      showToast('✅ 字幕跟读已开启');
+    }catch(e){
+      console.error('[inline-audio]',e);
+      showToast('❌ '+e.message,3000);
+      btn.textContent='🔤 字幕跟读';
+      btn.disabled=false;
+    }
+  },
+
+  deactivate(audioSrc){
+    const s=this.active.get(audioSrc);
+    if(!s)return;
+    s.audio.removeEventListener('timeupdate',s.onTimeUpdate);
+    s.audio.removeEventListener('ended',s.onEnded);
+    s.audio.removeEventListener('play',s.onPlay);
+    s.audio.removeEventListener('pause',s.onPause);
+    document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
+    s.btn.textContent='🔤 字幕跟读';
+    s.btn.classList.remove('active');
+    this.active.delete(audioSrc);
+  },
+
+  // Seek to text position in active inline audio (called from share bar)
+  seekToText(searchText){
+    if(!this.active.size)return false;
+    // Use the first (usually only) active session
+    const [audioSrc,s]=this.active.entries().next().value;
+    const {audio,segments,segTimeRanges}=s;
+    if(!segments||!segments.length||!segTimeRanges||!segTimeRanges.length)return false;
+    // Find segment matching selected text
+    const norm=t=>t.replace(/[\s\u3000]/g,'').toLowerCase();
+    const needle=norm(searchText).slice(0,50);
+    if(!needle)return false;
+    let sIdx=-1;
+    // Exact substring match
+    for(let i=0;i<segments.length;i++){
+      if(norm(segments[i].text).includes(needle)){sIdx=i;break;}
+    }
+    // Fallback: best prefix overlap
+    if(sIdx<0){
+      let bestIdx=0,bestScore=0;
+      for(let i=0;i<segments.length;i++){
+        const segN=norm(segments[i].text);
+        let score=0;
+        for(let j=0;j<needle.length&&j<segN.length;j++){
+          if(segN.includes(needle.slice(0,j+1)))score=j+1;
+          else break;
+        }
+        if(score>bestScore){bestScore=score;bestIdx=i;}
+      }
+      if(bestScore>=3)sIdx=bestIdx;
+    }
+    if(sIdx<0)return false;
+    // Seek audio
+    if(segTimeRanges[sIdx]){
+      audio.currentTime=segTimeRanges[sIdx].start;
+      if(audio.paused)audio.play();
+      console.log('[inline-audio] seekToText: segment',sIdx,'time',segTimeRanges[sIdx].start);
+      return true;
+    }
+    return false;
+  },
+
+  async ensureVTT(audioRel,btn){
+    // audioRel is relative path within vault, e.g. "raw/course/audio.mp3"
+    // First, try to fetch VTT directly
+    const vttRel=audioRel.replace(/\.[^.]+$/,'.vtt');
+    const vttUrl='/vault/'+vttRel.split('/').map(s=>encodeURIComponent(s)).join('/');
+    try{
+      const check=await fetch(vttUrl,{method:'HEAD'});
+      if(check.ok)return vttUrl;
+    }catch(e){}
+    // VTT doesn't exist, request transcription
+    btn.textContent='⏳ 转录中...';
+    const r=await fetch('/api/transcribe',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({audioPath:audioRel})
+    });
+    const d=await r.json();
+    if(!d.ok){
+      showToast('❌ 转录失败: '+(d.error||''),3000);
+      return null;
+    }
+    if(d.status==='done'||d.cached)return vttUrl;
+    // Poll for completion
+    return new Promise((resolve)=>{
+      let attempts=0;
+      const maxAttempts=180; // ~3 minutes at 1s intervals
+      const poll=async()=>{
+        attempts++;
+        if(attempts>maxAttempts){
+          showToast('❌ 转录超时',3000);
+          resolve(null);
+          return;
+        }
+        btn.textContent='⏳ 转录中 ('+attempts+'s)...';
+        try{
+          const sr=await fetch('/api/transcribe/status',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({audioPath:audioRel})
+          });
+          const sd=await sr.json();
+          if(sd.status==='done'){
+            resolve(vttUrl);
+            return;
+          }else if(sd.status==='not_started'){
+            // Transcription failed silently
+            showToast('❌ 转录失败',3000);
+            resolve(null);
+            return;
+          }
+        }catch(e){}
+        setTimeout(poll,1000);
+      };
+      setTimeout(poll,1000);
+    });
+  },
+
+  buildSegMap(cues,segments){
+    const segMap=[];
+    const segTimeRanges=[];
+    if(!cues.length||!segments.length)return{segMap,segTimeRanges};
+
+    /* -- Text-matching with intro detection & monotonic progression --
+       The audio closely reads the article. We:
+       1. Normalize both, concatenate segment texts
+       2. Find intro offset: scan cues until one matches near segFull start
+       3. Map remaining cues forward-only through segFull
+       4. Handle ASR errors with sliding-window fuzzy match */
+
+    const n=segments.length;
+
+    // Normalize: strip whitespace & punctuation, keep CJK/letters/digits
+    function norm(t){
+      return t.replace(/[\s\u3000\u00A0]/g,'')
+              .replace(/[^\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaffa-zA-Z0-9]/g,'')
+              .toLowerCase();
+    }
+
+    // Build concatenated segment text
+    const segNorms=segments.map(s=>norm(s.text));
+    let segFull='';
+    const segRanges=[];
+    for(let i=0;i<n;i++){
+      const start=segFull.length;
+      segFull+=segNorms[i];
+      segRanges.push({start,end:segFull.length});
+    }
+
+    function posToSeg(pos){
+      for(let i=0;i<n;i++){
+        if(pos<segRanges[i].end)return i;
+      }
+      return n-1;
+    }
+
+    const cueNorms=cues.map(c=>norm(c.text));
+
+    // Phase 1: Detect intro cues
+    // Find the first cue that matches at the START of segFull (within first 20 chars)
+    // This tells us where the real content begins in the audio
+    let introEnd=0; // index of first content cue
+    for(let i=0;i<Math.min(cues.length,30);i++){
+      const cn=cueNorms[i];
+      if(cn.length<2)continue;
+      const pos=segFull.indexOf(cn,0);
+      if(pos>=0&&pos<20){
+        introEnd=i;
+        break;
+      }
+    }
+    // Assign all cues before introEnd to segment 0
+    for(let i=0;i<introEnd;i++){
+      segMap.push(0);
+    }
+
+    // Phase 2: Forward-matching from introEnd onward
+    let cursor=0;   // position in segFull
+    let lastSeg=0;  // monotonic segment tracker
+
+    for(let i=introEnd;i<cues.length;i++){
+      const cn=cueNorms[i];
+      if(!cn){
+        segMap.push(lastSeg);
+        continue;
+      }
+
+      let matched=false;
+
+      // Strategy 1: exact substring forward match
+      if(cn.length>=2){
+        // For short cues (2-3 chars), limit search to avoid distant spurious matches
+        const maxSearch=(cn.length<=3)?Math.min(segFull.length,cursor+200):segFull.length;
+        const pos=segFull.indexOf(cn,cursor);
+        if(pos>=0&&pos<maxSearch){
+          const seg=posToSeg(pos);
+          if(seg>=lastSeg){
+            segMap.push(seg);
+            cursor=pos+cn.length;
+            lastSeg=seg;
+            matched=true;
+          }else{
+            // Would regress — skip this match
+          }
+        }
+      }
+
+      // Strategy 2: sliding window fuzzy match for ASR errors
+      // Look for best match in segFull[cursor..cursor+cn.length*3]
+      if(!matched&&cn.length>=4){
+        const windowSize=cn.length+20;
+        const searchEnd=Math.min(segFull.length,cursor+windowSize*3);
+        let bestPos=-1,bestScore=0;
+        for(let p=cursor;p<searchEnd-cn.length+1;p++){
+          const window=segFull.slice(p,p+cn.length);
+          let score=0;
+          for(let k=0;k<cn.length;k++){
+            if(cn[k]===window[k])score++;
+          }
+          const ratio=score/cn.length;
+          if(ratio>bestScore){bestScore=ratio;bestPos=p;}
+        }
+        if(bestScore>=0.6){
+          const seg=posToSeg(bestPos);
+          if(seg>=lastSeg){
+            segMap.push(seg);
+            cursor=bestPos+cn.length;
+            lastSeg=seg;
+            matched=true;
+          }
+        }
+      }
+
+      // Strategy 3: if still unmatched, stay on lastSeg
+      if(!matched){
+        segMap.push(lastSeg);
+      }
+    }
+
+    // Derive segTimeRanges from first/last cue per segment
+    const segFirst=new Array(n).fill(null);
+    const segLast=new Array(n).fill(null);
+    for(let i=0;i<segMap.length;i++){
+      const s=segMap[i];
+      if(s<0||s>=n)continue;
+      if(segFirst[s]===null)segFirst[s]=i;
+      segLast[s]=i;
+    }
+
+    for(let i=0;i<n;i++){
+      if(segFirst[i]!==null){
+        segTimeRanges.push({
+          start:cues[segFirst[i]].start,
+          end:cues[segLast[i]].end
+        });
+      }else{
+        segTimeRanges.push(null);
+      }
+    }
+
+    // Fill gaps by interpolation
+    for(let i=0;i<n;i++){
+      if(segTimeRanges[i]===null){
+        let prev=null,next=null;
+        for(let j=i-1;j>=0;j--){if(segTimeRanges[j]){prev={idx:j,...segTimeRanges[j]};break;}}
+        for(let j=i+1;j<n;j++){if(segTimeRanges[j]){next={idx:j,...segTimeRanges[j]};break;}}
+        if(prev&&next){
+          const gap=next.start-prev.end;
+          const spans=next.idx-prev.idx;
+          const off=i-prev.idx;
+          segTimeRanges[i]={
+            start:prev.end+gap*(off-0.5)/spans,
+            end:prev.end+gap*(off+0.5)/spans
+          };
+        }else if(prev){
+          segTimeRanges[i]={start:prev.end,end:prev.end+0.5};
+        }else if(next){
+          segTimeRanges[i]={start:Math.max(0,next.start-0.5),end:next.start};
+        }else{
+          segTimeRanges[i]={start:0,end:cues[cues.length-1].end};
+        }
+      }
+    }
+
+    // Make continuous
+    for(let i=1;i<n;i++){
+      if(segTimeRanges[i].start>segTimeRanges[i-1].end){
+        const mid=(segTimeRanges[i-1].end+segTimeRanges[i].start)/2;
+        segTimeRanges[i-1].end=mid;
+        segTimeRanges[i].start=mid;
+      }else if(segTimeRanges[i].start<segTimeRanges[i-1].end){
+        // Overlap - fix by splitting at the earlier segment's end
+        segTimeRanges[i].start=segTimeRanges[i-1].end;
+      }
+    }
+    segTimeRanges[0].start=0;
+    segTimeRanges[n-1].end=cues[cues.length-1].end;
+
+    return{segMap,segTimeRanges};
+  }
+};
+
+// Event delegation for audio subtitle buttons
+ct.addEventListener('click',function(e){
+  const subBtn=e.target.closest('.audio-sub-btn');
+  if(subBtn){
+    InlineAudio.toggleFollowAlong(subBtn);
+    return;
+  }
+});
+
+// ── Edit mode (read/edit toggle) ────────────────────
+const editToggle=$('editToggle');
+let editMode=false;
+let rawMarkdown=''; // raw markdown of current article
+
+editToggle.addEventListener('click',function(){
+  if(!curId)return;
+  if(editMode){
+    exitEditMode(false);
+  }else{
+    enterEditMode();
+  }
+});
+
+let _editScrollTop=0; // saved scroll position before entering edit mode
+
+async function enterEditMode(){
+  if(!curId)return;
+  // Save scroll position before switching to edit mode
+  _editScrollTop=ct.scrollTop;
+  // Fetch raw markdown
+  try{
+    const r=await fetch('/vault/'+curId.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
+    if(!r.ok)throw new Error(r.status);
+    rawMarkdown=await r.text();
+  }catch(e){
+    alert('无法加载文件内容');
+    return;
+  }
+  editMode=true;
+  editToggle.textContent='📖';
+  editToggle.title='阅读';
+  editToggle.classList.add('active');
+  // Replace content with editor
+  ct.innerHTML='<div class="edit-wrap">'+
+    '<div class="edit-toolbar">'+
+      '<button class="edit-save" id="editSave">💾 保存</button>'+
+      '<button id="editCancel">✕ 取消</button>'+
+      '<span class="edit-hint">Ctrl+S / ⌘S 保存</span>'+
+    '</div>'+
+    '<textarea class="edit-textarea" id="editArea"></textarea>'+
+  '</div>';
+  const editArea=$('editArea');
+  editArea.value=rawMarkdown;
+  editArea.focus();
+  // Restore approximate scroll position in textarea
+  setTimeout(()=>{ editArea.scrollTop=_editScrollTop; },0);
+  // Auto-resize
+  function autoResize(){
+    editArea.style.height='auto';
+    editArea.style.height=Math.max(400,editArea.scrollHeight)+'px';
+  }
+  editArea.addEventListener('input',autoResize);
+  setTimeout(autoResize,0);
+  // Save button
+  $('editSave').addEventListener('click',()=>saveEdit());
+  $('editCancel').addEventListener('click',()=>exitEditMode(false));
+}
+
+async function saveEdit(){
+  const editArea=$('editArea');
+  if(!editArea)return;
+  const content=editArea.value;
+  try{
+    const r=await fetch('/vault/'+curId.split('/').map(s=>encodeURIComponent(s)).join('/'),{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content})
+    });
+    const d=await r.json();
+    if(!d.ok){
+      alert('保存失败: '+(d.error||''));
+      return;
+    }
+    // Success — exit edit mode and reload article
+    exitEditMode(true);
+  }catch(e){
+    alert('保存请求失败');
+  }
+}
+
+function exitEditMode(reload){
+  editMode=false;
+  editToggle.textContent='📝';
+  editToggle.title='编辑';
+  editToggle.classList.remove('active');
+  const savedScroll=_editScrollTop;
+  if(reload&&curId){
+    loadArticle(curId).then(()=>{
+      setTimeout(()=>{ ct.scrollTop=savedScroll; },50);
+    });
+  }else if(curId){
+    loadArticle(curId).then(()=>{
+      setTimeout(()=>{ ct.scrollTop=savedScroll; },50);
+    });
+  }
+}
+
+// Ctrl+S / Cmd+S to save in edit mode
+document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key==='s'){
+    if(editMode){
+      e.preventDefault();
+      saveEdit();
+    }
+  }
 });
 
 // ── Start: check auth first ──────────────────────────

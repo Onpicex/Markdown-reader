@@ -10,14 +10,86 @@
 - 🔍 **全局搜索** — 侧边栏搜索框，键盘 `/` 快捷聚焦
 - ✅ **已读/未读** — 手动标记，状态存 localStorage
 - 🔒 **访问密码** — Cookie 认证保持一年，可通过网页修改密码
-- 🌙 **暗色模式** — 一键切换，护眼阅读
+- 🎨 **三主题切换** — 浅色/暗色/护眼三种阅读主题
 - 📱 **响应式设计** — 三断点适配（桌面 / 平板 / 手机）
 - 🎨 **书摘分享** — 选中文字生成精美书摘卡片，4 种风格可选，支持保存 PNG
 - 🎧 **TTS 听书** — Edge TTS 高品质语音朗读，实时段落高亮跟读，支持倍速调节，点击高亮段落可暂停/继续
+- 🎵 **MP3 字幕跟读** — 内嵌 MP3 音频逐段高亮跟读，智能模糊匹配算法对齐转录与原文，自动检测并跳过音频开头介绍
+- 🎯 **从选中处听** — 选中文字后一键跳转到对应音频位置播放（支持 TTS 和 MP3）
 - 🎵 **媒体播放** — 支持音频（mp3/wav/ogg/m4a）和视频（mp4/webm）内嵌播放
 - 🔗 **Wiki Link** — 支持 `[[链接]]` 站内跳转和 `![[文件]]` 嵌入
+- 📝 **高亮标注与笔记** — 选中文字可高亮或添加笔记，存储在同目录笔记.md
+- 🔗 **笔记链接跳转** — 从笔记页面点击跳转到原文对应高亮位置
+- ⬅️➡️ **上下篇导航** — 文章底部快速切换前/后一篇
+- 📂 **递归目录树** — 侧边栏多级目录展开/折叠，记忆展开状态
+- ✏️ **编辑模式** — 一键切换阅读/编辑模式，直接修改 Markdown 源文件
+- ☑️ **Checkbox 渲染** — Markdown 复选框正确渲染
+- 🍞 **面包屑导航** — 可点击的层级路径导航
 - 🔄 **热扫描** — 新增/删除文章后点击 🔄 即时更新目录，vault 变更自动检测
 - ⚡ **极速加载** — localStorage 缓存 + ETag 304 + gzip 压缩，目录秒出
+
+## 依赖
+
+### 必需
+
+| 依赖 | 说明 |
+|------|------|
+| **Node.js** ≥ 18 | HTTP 服务器运行时 |
+| **Python 3** | Vault 扫描器 (`scan.py`) |
+| **edge-tts** | Microsoft Edge TTS 引擎，生成 MP3 + WebVTT 字幕。免费，无需 API Key，本地调用微软 Edge 服务 |
+
+```bash
+pip install edge-tts
+```
+
+### 可选（MP3 字幕跟读功能）
+
+| 依赖 | 说明 |
+|------|------|
+| **mlx-whisper** | Apple Silicon 本地语音转文字模型，用于将内嵌 MP3 音频转录为 VTT 字幕。仅"字幕跟读"功能需要，需 Apple Silicon Mac |
+
+```bash
+pip install mlx-whisper
+```
+
+- 模型：`mlx-community/whisper-large-v3-turbo`（首次使用自动下载，约 1.5GB）
+- 性能：12 分钟音频 ≈ 1.5 分钟转录（Apple Silicon）
+- 注意：`server.js` 第 ~683 行的 mlx_whisper CLI 路径可能需要根据你的 Python 安装路径调整
+
+### 前端（已内置，无需安装）
+
+| 库 | 用途 |
+|------|------|
+| **marked.js** | Markdown 渲染 |
+| **html2canvas** | 书摘分享卡片/截图生成 |
+
+## 功能成本分类
+
+### 🆓 零成本功能（本地运行，不消耗 Token）
+
+| 功能 | 技术实现 |
+|------|----------|
+| Markdown 渲染阅读 | marked.js (浏览器端) |
+| TTS 听书 + 段落高亮 | edge-tts (免费微软 Edge 服务) |
+| MP3 字幕跟读 | mlx-whisper (本地 Apple Silicon 模型) |
+| MP3 从选中处听 | 前端 seek + HTTP Range |
+| 书摘分享卡片 | html2canvas (浏览器端) |
+| 高亮标注 + 笔记 | 本地文件存储 (笔记.md) |
+| 全局搜索 | 本地 catalog.json |
+| 多主题切换 | CSS + localStorage |
+| 目录树浏览 | 本地 catalog 数据 |
+| 编辑/阅读模式 | 直接读写 vault 文件 |
+| Wiki Link 跳转 | 前端路由 |
+| 热扫描 + SSE 推送 | fs.watch + Python scanner |
+| 密码认证 | Cookie session |
+
+### 💰 消耗 AI Token 的功能
+
+| 功能 | 说明 |
+|------|------|
+| 无 | 本项目完全不依赖任何 AI API，所有功能均在本地运行 |
+
+> **Note:** 本项目 100% 自包含，无需 OpenAI/Anthropic/Google API Key。唯一的网络依赖是 edge-tts，使用微软免费的 Edge 服务。
 
 ## 架构
 
@@ -34,6 +106,12 @@
               ├── /api/password  → POST 修改密码
               ├── /api/rescan    → GET 重新扫描 vault
               ├── /api/tts       → POST 生成 TTS 音频 + 字幕
+              ├── /api/note      → POST 添加笔记/高亮
+              ├── /api/note/delete → POST 删除笔记
+              ├── /api/note/edit → POST 编辑笔记
+              ├── /api/notes     → GET 获取文章笔记
+              ├── /api/transcribe → POST 发起音频转录
+              ├── /api/transcribe/status → POST 查询转录进度
               └── /api/events    → SSE 实时目录更新推送
 ```
 
@@ -41,6 +119,7 @@
 - **后端**：Node.js 轻量 HTTP server，直接代理 vault 目录，gzip 压缩文本响应
 - **扫描器**：`scan.py` 扫描 vault 生成 `catalog.json`（只含标题和路径，不含内容）
 - **TTS**：[Edge TTS](https://github.com/rany2/edge-tts) 生成语音 + WebVTT 字幕，前端实时高亮跟读
+- **转录**：mlx-whisper 本地转录 MP3 → VTT 字幕，前端模糊匹配对齐原文段落
 
 ## 快速开始
 
@@ -49,6 +128,7 @@
 - Node.js ≥ 18
 - Python 3
 - [edge-tts](https://github.com/rany2/edge-tts)（TTS 功能需要）：`pip install edge-tts`
+- [mlx-whisper](https://github.com/ml-explore/mlx-examples)（MP3 字幕跟读，可选）：`pip install mlx-whisper`
 
 ### 安装
 
@@ -159,6 +239,21 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 
 支持「📋 复制文字」（带出处）和「💾 保存图片」（html2canvas 3x 高清 PNG）。
 
+## 技术细节
+
+- 认证：随机 session token，cookie 有效期一年
+- `catalog.json` 只存标题 + 路径（不含内容），前端按需 fetch `/vault/*` 拿原始 Markdown
+- 前端用 marked.js 实时渲染，零预编译
+- catalog.json 使用 ETag + `no-cache` 策略（浏览器先验证再决定是否下载），前端额外用 localStorage 做即时缓存
+- Obsidian embed 语法（`![[文件]]`）支持图片、音频、视频三种媒体类型
+- TTS 音频缓存在 `/tmp/obsidian-reader-tts/`，基于文章内容哈希命名，缓存 7 天自动清理
+- TTS 音频服务支持 HTTP Range 请求（206 Partial Content），确保浏览器 seek 到任意位置
+- Vault 音频/视频文件支持 HTTP Range 请求（206 Partial Content），使用 `fs.createReadStream` 流式传输
+- InlineAudio 字幕跟读使用模糊字符匹配算法（charSim），处理 ASR 识别误差，自动检测开头介绍部分
+- 笔记系统支持两种存储格式：`## [[title]]` 分节和 `---` 分隔块，向后兼容
+- 主题存储在 localStorage，三种主题：light / dark / eye-care
+- fs.watch 递归监听 vault 目录变更，2 秒防抖后自动 rescan + SSE 推送
+
 ## 性能优化
 
 - **gzip 压缩** — 文本响应（JSON/HTML/JS/CSS/VTT 等）自动 gzip，catalog.json 从 364KB 压缩到 ~39KB
@@ -180,17 +275,6 @@ obsidian-reader/
     └── data/
         └── catalog.json — 文章目录（自动生成，.gitignore 忽略）
 ```
-
-## 技术细节
-
-- 认证：随机 session token，cookie 有效期一年
-- `catalog.json` 只存标题 + 路径（不含内容），前端按需 fetch `/vault/*` 拿原始 Markdown
-- 前端用 marked.js 实时渲染，零预编译
-- catalog.json 使用 ETag + `no-cache` 策略（浏览器先验证再决定是否下载），前端额外用 localStorage 做即时缓存
-- Obsidian embed 语法（`![[文件]]`）支持图片、音频、视频三种媒体类型
-- TTS 音频缓存在 `/tmp/obsidian-reader-tts/`，基于文章内容哈希命名，缓存 7 天自动清理
-- TTS 音频服务支持 HTTP Range 请求（206 Partial Content），确保浏览器 seek 到任意位置
-- fs.watch 递归监听 vault 目录变更，2 秒防抖后自动 rescan + SSE 推送
 
 ## License
 

@@ -110,12 +110,16 @@ def extract_title(meta: dict, body: str, filename: str) -> str:
 
 
 def get_subcategory(rel_path: str) -> str:
-    """Extract subcategory from path."""
+    """Extract subcategory from path — all intermediate directory levels.
+    
+    For rel_path like 'raw/A/B/C/file.md', parts = ['raw','A','B','C','file.md']
+    subcategory = 'A/B/C' (everything between the top-level dir and the filename)
+    """
     parts = rel_path.split('/')
-    if len(parts) >= 4:
-        return parts[1] + '/' + parts[2]
-    elif len(parts) >= 3:
-        return parts[1]
+    # parts[0] = top-level dir (raw/wiki), parts[-1] = filename
+    # subcategory = everything in between
+    if len(parts) >= 3:
+        return '/'.join(parts[1:-1])
     return ""
 
 
