@@ -225,6 +225,10 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 @keyframes shareIn{from{opacity:0;transform:translateX(-50%) translateY(4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 .share-bar button{display:flex;align-items:center;gap:4px;padding:6px 12px;border:none;border-radius:5px;background:none;color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;white-space:nowrap;transition:background .12s}
 .share-bar button:hover{background:var(--gold-faint);color:var(--gold)}
+/* Mobile: fixed bottom bar to avoid system selection menu overlap */
+.share-bar.mobile-bottom{position:fixed;left:0!important;right:0;bottom:0!important;top:auto!important;transform:none;width:100%;border-radius:16px 16px 0 0;padding:10px 8px calc(10px + env(safe-area-inset-bottom));justify-content:center;gap:4px;box-shadow:0 -4px 20px rgba(0,0,0,.15);animation:shareInMobile .2s ease}
+.share-bar.mobile-bottom button{padding:10px 14px;font-size:14px}
+@keyframes shareInMobile{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
 
 /* Share card overlay */
 /* Share overlay */
@@ -525,7 +529,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
 <!-- Share excerpt bar (appears on text selection) -->
 <div class="share-bar" id="shareBar">
   <button id="shareTtsBtn">🎧 TTS</button>
-  <button id="shareMp3Btn" style="display:none">🎵 MP3</button>
+  <button id="shareMp3Btn" style="display:none">🎵 从此处听(MP3)</button>
   <button id="shareExcerpt">📋 分享书摘</button>
   <button id="shareHighlight">🖍️ 划线</button>
   <button id="shareNote">📝 记笔记</button>
@@ -1283,8 +1287,8 @@ function applyTtsSetting(enabled){
   const shareMp3Btn=$('shareMp3Btn');
   if(ttsBtn) ttsBtn.style.display=enabled?'':'none';
   if(shareTtsBtn) shareTtsBtn.style.display=enabled?'':'none';
-  // MP3 button visibility depends on InlineAudio, not TTS setting
-  if(shareMp3Btn) shareMp3Btn.style.display=(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0)?'':'none';
+  // MP3 button visibility depends on presence of audio embeds in article
+  if(shareMp3Btn) shareMp3Btn.style.display=(document.querySelector('.art-body .audio-embed'))?'':'none';
   if(!enabled && typeof TTS!=='undefined' && TTS.audio) TTS.stop();
   // Update toggle label
   const lbl=$('cfgTtsLabel');
@@ -1467,6 +1471,8 @@ const shareOverlay=$('shareOverlay'),shareCard=$('shareCard');
 const scText=$('scText'),scTitle=$('scTitle');
 const saCopy=$('saCopy'),saSave=$('saSave'),saClose=$('saClose');
 let selectedText='';
+// Mobile detection for share bar positioning
+const _isMobileDevice=(function(){return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)||(navigator.maxTouchPoints>1&&window.innerWidth<1024);})();
 
 // Detect selection in .art-body and show share bar
 let _shareDebounce=null;
@@ -1486,24 +1492,33 @@ function showShareBarIfSelected(){
   const text=sel.toString().trim();
   if(text.length<2){shareBar.classList.remove('vis');return;}
   selectedText=text;
-  // Show/hide MP3 button based on active inline audio; show TTS button based on setting
+  // Show/hide MP3 button based on presence of audio embeds in article; show TTS button based on setting
   const _mp3Btn=$('shareMp3Btn');
   const _ttsBtn=$('shareTtsBtn');
-  if(_mp3Btn) _mp3Btn.style.display=(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0)?'':'none';
+  if(_mp3Btn) _mp3Btn.style.display=(document.querySelector('.art-body .audio-embed'))?'':'none';
   if(_ttsBtn) _ttsBtn.style.display=ttsFeatureEnabled?'':'none';
-  // Position bar below the selection (avoids fighting with system menu above)
-  const range=sel.getRangeAt(0);
-  const rect=range.getBoundingClientRect();
-  const barW=200;
-  let left=rect.left+rect.width/2;
-  let top=rect.bottom+10;
-  if(left<barW/2+8)left=barW/2+8;
-  if(left>window.innerWidth-barW/2-8)left=window.innerWidth-barW/2-8;
-  // If below viewport, put above
-  if(top+50>window.innerHeight)top=rect.top-48;
-  shareBar.style.left=left+'px';
-  shareBar.style.top=top+'px';
-  shareBar.classList.add('vis');
+  // Mobile: fixed bottom bar to avoid system selection menu overlap
+  if(_isMobileDevice){
+    shareBar.classList.add('mobile-bottom');
+    shareBar.style.left='';
+    shareBar.style.top='';
+    shareBar.classList.add('vis');
+  } else {
+    // Desktop: Position bar below the selection (avoids fighting with system menu above)
+    shareBar.classList.remove('mobile-bottom');
+    const range=sel.getRangeAt(0);
+    const rect=range.getBoundingClientRect();
+    const barW=200;
+    let left=rect.left+rect.width/2;
+    let top=rect.bottom+10;
+    if(left<barW/2+8)left=barW/2+8;
+    if(left>window.innerWidth-barW/2-8)left=window.innerWidth-barW/2-8;
+    // If below viewport, put above
+    if(top+50>window.innerHeight)top=rect.top-48;
+    shareBar.style.left=left+'px';
+    shareBar.style.top=top+'px';
+    shareBar.classList.add('vis');
+  }
 }
 function debouncedShowShareBar(){
   clearTimeout(_shareDebounce);
@@ -1561,8 +1576,8 @@ shareTtsBtn.addEventListener('click',function(e){
   console.log('[tts] shareTtsBtn clicked, text:',text.slice(0,30));
   TTS.playFromText(text);
 });
-// MP3 button — always uses InlineAudio.seekToText
-shareMp3Btn.addEventListener('click',function(e){
+// MP3 button — auto-activates InlineAudio if needed, then seeks to text
+shareMp3Btn.addEventListener('click',async function(e){
   e.stopPropagation();
   _shareBarLock=false;
   const text=selectedText;
@@ -1570,7 +1585,19 @@ shareMp3Btn.addEventListener('click',function(e){
   shareBar.classList.remove('vis');
   window.getSelection().removeAllRanges();
   console.log('[inline-audio] shareMp3Btn clicked, text:',text.slice(0,30));
-  if(typeof InlineAudio!=='undefined'){
+  if(typeof InlineAudio==='undefined')return;
+  // If InlineAudio is already active, just seek
+  if(InlineAudio.active.size>0){
+    InlineAudio.seekToText(text);
+    return;
+  }
+  // Auto-activate: find first audio-sub-btn in article and toggle follow-along
+  const subBtn=document.querySelector('.art-body .audio-sub-btn');
+  if(!subBtn){console.log('[inline-audio] no audio-sub-btn found');return;}
+  showToast('⏳ 正在开启字幕跟读...');
+  await InlineAudio.toggleFollowAlong(subBtn);
+  // After activation, seek to the selected text
+  if(InlineAudio.active.size>0){
     InlineAudio.seekToText(text);
   }
 });
@@ -2211,8 +2238,11 @@ const TTS={
     const spokenEnd=segRanges[lastSpokenSeg]?segRanges[lastSpokenSeg].end:segFullNorm.length;
     const searchText=segFullNorm.substring(0,spokenEnd);
     // Phase 1: Sequential fuzzy match each cue to a position in searchText
+    // Robust version: handles VTT content that diverges from article text
+    // (e.g. promo intros, extra statistics, different wording from audio source)
     let cursor=0;
     const cuePos=[];
+    let consecutiveMisses=0; // track consecutive low-score matches for re-anchoring
     for(let i=0;i<this.cues.length;i++){
       const cn=norm(this.cues[i].text);
       if(!cn||cn.length<1){cuePos.push({pos:cursor,score:0});continue;}
@@ -2221,7 +2251,7 @@ const TTS={
       const se=Math.min(searchText.length,cursor+maxLA);
       // Try exact match first
       let ep=searchText.indexOf(cn,ss);
-      if(ep>=0&&ep<se){cuePos.push({pos:ep,score:1});cursor=ep+cn.length;continue;}
+      if(ep>=0&&ep<se){cuePos.push({pos:ep,score:1});cursor=ep+cn.length;consecutiveMisses=0;continue;}
       // Fuzzy: slide window, score by charSim
       let bp=-1,bs=0;
       for(let p=ss;p<se;p++){
@@ -2230,8 +2260,50 @@ const TTS={
         const sc=charSim(cn,w);
         if(sc>bs){bs=sc;bp=p;if(sc>=0.95)break;}
       }
-      if(bs>=0.35&&bp>=0){cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,bp+cn.length);}
-      else cuePos.push({pos:cursor,score:0});
+      // Use higher threshold (0.5) to avoid false matches against wrong text
+      // For medium-confidence matches (0.5-0.7), limit cursor advance to prevent big jumps
+      if(bs>=0.5&&bp>=0){
+        const advance=bp+cn.length;
+        if(bs>=0.7){
+          // High confidence: advance cursor normally
+          cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,advance);consecutiveMisses=0;
+        } else {
+          // Medium confidence: accept position but limit cursor advance
+          // Don't let cursor jump more than 3x cue length ahead of current position
+          const maxJump=cn.length*3;
+          if(bp-cursor<=maxJump){
+            cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,advance);consecutiveMisses=0;
+          } else {
+            // Too far ahead for a low-confidence match — treat as miss
+            cuePos.push({pos:cursor,score:0});consecutiveMisses++;
+          }
+        }
+      }
+      else{
+        cuePos.push({pos:cursor,score:0});consecutiveMisses++;
+      }
+      // Re-anchoring: after 3+ consecutive misses, try a wider global search
+      // to find where the VTT text picks up again in the article
+      if(consecutiveMisses>=3&&i+1<this.cues.length){
+        // Look ahead at next few cues and try to find a strong match anywhere after cursor
+        for(let look=1;look<=Math.min(3,this.cues.length-i-1);look++){
+          const nextCn=norm(this.cues[i+look].text);
+          if(!nextCn||nextCn.length<3)continue;
+          // Search the full remaining text
+          const gep=searchText.indexOf(nextCn,cursor);
+          if(gep>=0){cursor=gep;consecutiveMisses=0;break;}
+          // Try fuzzy global search in remaining text
+          let gbp=-1,gbs=0;
+          const gse=Math.min(searchText.length,cursor+2000);
+          for(let p=cursor;p<gse;p++){
+            const we=Math.min(p+nextCn.length+3,searchText.length);
+            const w=searchText.substring(p,we);
+            const sc=charSim(nextCn,w);
+            if(sc>gbs){gbs=sc;gbp=p;if(sc>=0.95)break;}
+          }
+          if(gbs>=0.7&&gbp>=0){cursor=gbp;consecutiveMisses=0;break;}
+        }
+      }
     }
     // Phase 2: Convert positions to segment indices
     const posToSeg=pos=>{
@@ -2291,7 +2363,24 @@ const TTS={
         i++;
       }
     }
-    return cues;
+    // Post-process: strip trailing garbage cues (repeated/zero-duration/empty content)
+    // Common in whisper-generated VTTs where the model hallucinates at the end
+    let lastGood=cues.length-1;
+    for(let j=cues.length-1;j>=1;j--){
+      const c=cues[j];
+      // Zero-duration cues
+      if(c.end<=c.start){lastGood=j-1;continue;}
+      // Duplicate text: same as previous cue or very short repeated content
+      if(c.text===cues[j-1].text){lastGood=j-1;continue;}
+      // Very short cue that matches a recent cue's text (hallucination loop)
+      let isRepeat=false;
+      for(let k=Math.max(0,j-5);k<j;k++){
+        if(cues[k].text===c.text){isRepeat=true;break;}
+      }
+      if(isRepeat){lastGood=j-1;continue;}
+      break;
+    }
+    return cues.slice(0,lastGood+1);
   },
 
   parseTime(s){
@@ -2787,12 +2876,14 @@ const InlineAudio={
     const segTimeRanges=[];
     if(!cues.length||!segments.length)return{segMap,segTimeRanges};
 
-    /* -- Text-matching with intro detection & monotonic progression --
-       The audio closely reads the article. We:
-       1. Normalize both, concatenate segment texts
-       2. Find intro offset: scan cues until one matches near segFull start
-       3. Map remaining cues forward-only through segFull
-       4. Handle ASR errors with sliding-window fuzzy match */
+    /* -- Robust text-matching with intro detection & divergence recovery --
+       The audio may differ from article text (ASR errors, extra spoken content,
+       different wording). We handle:
+       1. Intro/ad segments in audio not present in article
+       2. Article text not present in audio (skipped sections)
+       3. Audio content not in article (ad-lib, extra examples)
+       4. ASR transcription errors (wrong characters)
+       5. Hallucinated repeated cues at end of VTT */
 
     const n=segments.length;
 
@@ -2801,6 +2892,25 @@ const InlineAudio={
       return t.replace(/[\s\u3000\u00A0]/g,'')
               .replace(/[^\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaffa-zA-Z0-9]/g,'')
               .toLowerCase();
+    }
+
+    // LCS-based similarity (handles insertions/deletions better than position-aligned)
+    function lcsRatio(a,b){
+      if(!a||!b)return 0;
+      const m=a.length,nn=b.length;
+      if(!m||!nn)return 0;
+      // Optimized: only keep 2 rows
+      let prev=new Array(nn+1).fill(0);
+      let curr=new Array(nn+1).fill(0);
+      for(let i=1;i<=m;i++){
+        for(let j=1;j<=nn;j++){
+          if(a[i-1]===b[j-1])curr[j]=prev[j-1]+1;
+          else curr[j]=Math.max(prev[j],curr[j-1]);
+        }
+        [prev,curr]=[curr,prev];
+        curr.fill(0);
+      }
+      return prev[nn]/Math.max(m,nn);
     }
 
     // Build concatenated segment text
@@ -2820,20 +2930,51 @@ const InlineAudio={
       return n-1;
     }
 
-    const cueNorms=cues.map(c=>norm(c.text));
+    // Clean cues: detect and truncate hallucinated repeated tails
+    let effectiveCueCount=cues.length;
+    if(cues.length>10){
+      // Check last 30 cues for repetitive content
+      const tailStart=Math.max(0,cues.length-30);
+      let repStart=-1;
+      for(let i=tailStart;i<cues.length-2;i++){
+        const t=norm(cues[i].text);
+        if(t.length<2)continue;
+        let repCount=0;
+        for(let j=i+1;j<cues.length;j++){
+          const t2=norm(cues[j].text);
+          if(t2===t||lcsRatio(t,t2)>0.8)repCount++;
+        }
+        if(repCount>=3){
+          repStart=i;
+          break;
+        }
+      }
+      if(repStart>0)effectiveCueCount=repStart;
+    }
+
+    const cueNorms=[];
+    for(let i=0;i<effectiveCueCount;i++)cueNorms.push(norm(cues[i].text));
 
     // Phase 1: Detect intro cues
-    // Find the first cue that matches at the START of segFull (within first 20 chars)
-    // This tells us where the real content begins in the audio
-    let introEnd=0; // index of first content cue
-    for(let i=0;i<Math.min(cues.length,30);i++){
+    // Find the first cue whose text appears in segFull (anywhere, not just start)
+    // This handles cases where article starts with text not present in audio
+    let introEnd=0;
+    for(let i=0;i<Math.min(effectiveCueCount,30);i++){
       const cn=cueNorms[i];
-      if(cn.length<2)continue;
+      if(cn.length<4)continue;
       const pos=segFull.indexOf(cn,0);
-      if(pos>=0&&pos<20){
+      if(pos>=0){
         introEnd=i;
         break;
       }
+      // Also try fuzzy for first content cue
+      let found=false;
+      const searchLimit=Math.min(segFull.length,500);
+      for(let p=0;p<searchLimit-cn.length+1;p++){
+        const w=segFull.slice(p,p+cn.length+2);
+        if(lcsRatio(cn,w)>=0.75){found=true;break;}
+      }
+      if(found){introEnd=i;break;}
     }
     // Assign all cues before introEnd to segment 0
     for(let i=0;i<introEnd;i++){
@@ -2843,8 +2984,9 @@ const InlineAudio={
     // Phase 2: Forward-matching from introEnd onward
     let cursor=0;   // position in segFull
     let lastSeg=0;  // monotonic segment tracker
+    let consecutiveMisses=0; // track failed matches for recovery
 
-    for(let i=introEnd;i<cues.length;i++){
+    for(let i=introEnd;i<effectiveCueCount;i++){
       const cn=cueNorms[i];
       if(!cn){
         segMap.push(lastSeg);
@@ -2855,9 +2997,8 @@ const InlineAudio={
 
       // Strategy 1: exact substring forward match
       if(cn.length>=2){
-        // For short cues (2-3 chars), limit search to avoid distant spurious matches
         const maxSearch=(cn.length<=3)?Math.min(segFull.length,cursor+200):segFull.length;
-        const pos=segFull.indexOf(cn,cursor);
+        const pos=segFull.indexOf(cn,Math.max(0,cursor-5));
         if(pos>=0&&pos<maxSearch){
           const seg=posToSeg(pos);
           if(seg>=lastSeg){
@@ -2865,42 +3006,110 @@ const InlineAudio={
             cursor=pos+cn.length;
             lastSeg=seg;
             matched=true;
-          }else{
-            // Would regress — skip this match
+            consecutiveMisses=0;
           }
         }
       }
 
-      // Strategy 2: sliding window fuzzy match for ASR errors
-      // Look for best match in segFull[cursor..cursor+cn.length*3]
+      // Strategy 2: LCS-based sliding window fuzzy match
       if(!matched&&cn.length>=4){
-        const windowSize=cn.length+20;
-        const searchEnd=Math.min(segFull.length,cursor+windowSize*3);
+        // Wider search window when we've had consecutive misses (audio-article divergence)
+        const baseWindow=cn.length+20;
+        const missMultiplier=Math.min(8,3+consecutiveMisses);
+        const searchEnd=Math.min(segFull.length,cursor+baseWindow*missMultiplier);
         let bestPos=-1,bestScore=0;
-        for(let p=cursor;p<searchEnd-cn.length+1;p++){
-          const window=segFull.slice(p,p+cn.length);
-          let score=0;
-          for(let k=0;k<cn.length;k++){
-            if(cn[k]===window[k])score++;
-          }
-          const ratio=score/cn.length;
-          if(ratio>bestScore){bestScore=ratio;bestPos=p;}
+        const step=cn.length<=6?1:2; // optimization: larger step for longer cues
+        // Window buffer scales with cue length to avoid penalizing short cues
+        const winBuf=Math.max(2,Math.min(6,Math.ceil(cn.length*0.25)));
+        for(let p=Math.max(0,cursor-5);p<searchEnd-cn.length+1;p+=step){
+          const wEnd=Math.min(p+cn.length+winBuf,segFull.length);
+          const w=segFull.slice(p,wEnd);
+          const sc=lcsRatio(cn,w);
+          if(sc>bestScore){bestScore=sc;bestPos=p;}
+          if(sc>=0.9)break; // good enough, stop early
         }
-        if(bestScore>=0.6){
-          const seg=posToSeg(bestPos);
+        // Use HIGHER threshold when there are consecutive misses to avoid false re-anchoring
+        // Short normalized cues (<=6 chars after removing numbers/punctuation) need even higher
+        // threshold since common chars like 的/有/和 match too easily
+        let threshold=0.55;
+        if(cn.length<=6)threshold=0.7; // very short cues need high confidence
+        else if(consecutiveMisses>=3)threshold=0.65; // during divergence, be strict
+        if(bestScore>=threshold&&bestPos>=0){
+          // Additional guard: don't let a medium-confidence match jump too far
+          const jumpDist=bestPos-cursor;
+          const maxReasonableJump=cn.length*6;
+          if(bestScore<0.75&&jumpDist>maxReasonableJump){
+            // Suspicious: low-confidence match that's very far ahead
+            // Don't accept — let it fall through to Strategy 3 recovery
+          } else {
+            const seg=posToSeg(bestPos);
+            if(seg>=lastSeg){
+              segMap.push(seg);
+              cursor=bestPos+cn.length;
+              lastSeg=seg;
+              matched=true;
+              consecutiveMisses=0;
+            }
+          }
+        }
+      }
+
+      // Strategy 3: Recovery — if many consecutive misses, try a broad search
+      // to re-anchor alignment (audio may have extra content not in article)
+      if(!matched&&consecutiveMisses>=4&&cn.length>=4){
+        // Search the entire remaining segFull for this cue
+        const pos=segFull.indexOf(cn,cursor);
+        if(pos>=0){
+          const seg=posToSeg(pos);
           if(seg>=lastSeg){
             segMap.push(seg);
-            cursor=bestPos+cn.length;
+            cursor=pos+cn.length;
             lastSeg=seg;
             matched=true;
+            consecutiveMisses=0;
+          }
+        }
+        if(!matched){
+          // Try LCS over broader range
+          const broadEnd=Math.min(segFull.length,cursor+cn.length*30);
+          const bWinBuf=Math.max(2,Math.min(6,Math.ceil(cn.length*0.25)));
+          let bestPos=-1,bestScore=0;
+          for(let p=cursor;p<broadEnd-cn.length+1;p+=2){
+            const w=segFull.slice(p,p+cn.length+bWinBuf);
+            const sc=lcsRatio(cn,w);
+            if(sc>bestScore){bestScore=sc;bestPos=p;}
+            if(sc>=0.85)break;
+          }
+          if(bestScore>=0.45&&bestPos>=0){
+            const seg=posToSeg(bestPos);
+            if(seg>=lastSeg){
+              segMap.push(seg);
+              cursor=bestPos+cn.length;
+              lastSeg=seg;
+              matched=true;
+              consecutiveMisses=0;
+            }
           }
         }
       }
 
-      // Strategy 3: if still unmatched, stay on lastSeg
+      // Strategy 4: if still unmatched, stay on lastSeg
       if(!matched){
-        segMap.push(lastSeg);
+        // Try to assign to the next segment if cursor is near a boundary
+        // (handles case where audio is ahead of cursor in article)
+        const curSeg=posToSeg(cursor);
+        if(curSeg>lastSeg){
+          segMap.push(curSeg);
+          lastSeg=curSeg;
+        }else{
+          segMap.push(lastSeg);
+        }
+        consecutiveMisses++;
       }
+    }
+    // Fill remaining (truncated hallucination cues) with last segment
+    for(let i=effectiveCueCount;i<cues.length;i++){
+      segMap.push(Math.min(lastSeg,n-1));
     }
 
     // Derive segTimeRanges from first/last cue per segment
