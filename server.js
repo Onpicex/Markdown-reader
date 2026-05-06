@@ -236,7 +236,8 @@ const server = http.createServer(async (req, res) => {
     pathname === '/api/note/edit' ||
     pathname === '/api/notes' ||
     pathname === '/api/transcribe' ||
-    pathname === '/api/transcribe/status';
+    pathname === '/api/transcribe/status' ||
+    pathname === '/api/align';
 
   if (isProtectedPath && !isAuthed(req)) {
     jsonReply(res, 401, { error: 'Unauthorized' });
@@ -737,6 +738,70 @@ const server = http.createServer(async (req, res) => {
         }
       }
     } catch (e) {
+      jsonReply(res, 500, { ok: false, error: e.message });
+    }
+    return;
+  }
+
+  // /api/align - POST semantic alignment using embedding model
+  // Returns {segMap, segTimeRanges, stats} or cached result
+  if (pathname === '/api/align' && req.method === 'POST') {
+    if (!isAuthed(req)) { jsonReply(res, 401, { error: 'Unauthorized' }); return; }
+    const body = await readBody(req);
+    try {
+      const { articleId, vttPath } = JSON.parse(body);
+      if (!articleId || !vttPath || !config.vault) {
+        jsonReply(res, 400, { ok: false, error: 'Missing articleId or vttPath' });
+        return;
+      }
+      const articleResolved = path.resolve(config.vault, articleId);
+      const vttResolved = path.resolve(config.vault, vttPath);
+      if (!articleResolved.startsWith(path.resolve(config.vault)) ||
+          !vttResolved.startsWith(path.resolve(config.vault))) {
+        jsonReply(res, 403, { ok: false, error: 'Forbidden' });
+        return;
+      }
+      if (!fs.existsSync(articleResolved) || !fs.existsSync(vttResolved)) {
+        jsonReply(res, 404, { ok: false, error: 'File not found' });
+        return;
+      }
+      // Cache: check for .align.json next to VTT
+      const cachePath = vttResolved.replace(/\.vtt$/i, '.align.json');
+      if (fs.existsSync(cachePath)) {
+        try {
+          const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+          cached.cached = true;
+          jsonReply(res, 200, { ok: true, ...cached });
+          return;
+        } catch (e) { /* cache corrupted, regenerate */ }
+      }
+      // Run align.py
+      const alignScript = path.join(DIR, 'align.py');
+      const proc = spawn(PYTHON, [alignScript, articleResolved, vttResolved, cachePath], {
+        timeout: 60000,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
+      let stderr = '';
+      proc.stderr.on('data', d => stderr += d.toString());
+      proc.on('close', (code) => {
+        if (code === 0 && fs.existsSync(cachePath)) {
+          try {
+            const result = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+            jsonReply(res, 200, { ok: true, ...result });
+          } catch (e) {
+            jsonReply(res, 500, { ok: false, error: 'Failed to read alignment result' });
+          }
+        } else {
+          console.error('[align] failed:', stderr.slice(-500));
+          jsonReply(res, 500, { ok: false, error: 'Alignment failed: ' + stderr.slice(-200) });
+        }
+      });
+      proc.on('error', (err) => {
+        console.error('[align] spawn error:', err.message);
+        jsonReply(res, 500, { ok: false, error: 'Spawn failed: ' + err.message });
+      });
+    } catch (e) {
+      console.error('[align] error:', e.message);
       jsonReply(res, 500, { ok: false, error: e.message });
     }
     return;
