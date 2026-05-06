@@ -2104,6 +2104,7 @@ const ttsProgress=$('ttsProgress'),ttsProgressFill=$('ttsProgressFill');
 const ttsInfo=$('ttsInfo'),ttsSpeedSel=$('ttsSpeed');
 
 const TTS={
+  debug: new URLSearchParams(location.search).has('debug'),
   audio: null,
   cues: [],           // {start, end, text} from WebVTT
   segments: [],       // {el, text} DOM segments for highlight
@@ -2204,6 +2205,8 @@ const TTS={
     this.segMap=[];
     this._segTimeRanges=[];
     if(!this.cues.length||!this.segments.length){return;}
+    const DBG=this.debug;
+    const dbgLog=[];  // per-cue debug entries for TTS alignment
     // Normalize: remove punctuation, whitespace, numbers; lowercase
     const norm=s=>s.replace(/[\s\u3000.,;:!?\-\u2026\u201c\u201d\u2018\u2019\uff0c\u3002\uff01\uff1f\u3001\uff1b\uff1a\u300a\u300b\u3010\u3011()\[\]#\uff08\uff09\u2014\u2013\u200b]/g,'').replace(/\d+/g,'').toLowerCase();
     // Character-level similarity with insertion/deletion tolerance
@@ -2245,13 +2248,13 @@ const TTS={
     let consecutiveMisses=0; // track consecutive low-score matches for re-anchoring
     for(let i=0;i<this.cues.length;i++){
       const cn=norm(this.cues[i].text);
-      if(!cn||cn.length<1){cuePos.push({pos:cursor,score:0});continue;}
+      if(!cn||cn.length<1){cuePos.push({pos:cursor,score:0});if(DBG)dbgLog.push({cue:i,text:this.cues[i].text.slice(0,30),strategy:'empty',seg:'-',score:0});continue;}
       const maxLA=Math.max(200,cn.length*15);
       const ss=Math.max(0,cursor-10);
       const se=Math.min(searchText.length,cursor+maxLA);
       // Try exact match first
       let ep=searchText.indexOf(cn,ss);
-      if(ep>=0&&ep<se){cuePos.push({pos:ep,score:1});cursor=ep+cn.length;consecutiveMisses=0;continue;}
+      if(ep>=0&&ep<se){cuePos.push({pos:ep,score:1});if(DBG)dbgLog.push({cue:i,text:this.cues[i].text.slice(0,30),strategy:'exact',score:1,cursor:ep+cn.length});cursor=ep+cn.length;consecutiveMisses=0;continue;}
       // Fuzzy: slide window, score by charSim
       let bp=-1,bs=0;
       for(let p=ss;p<se;p++){
@@ -2266,36 +2269,36 @@ const TTS={
         const advance=bp+cn.length;
         if(bs>=0.7){
           // High confidence: advance cursor normally
-          cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,advance);consecutiveMisses=0;
+          cuePos.push({pos:bp,score:bs});if(DBG)dbgLog.push({cue:i,text:this.cues[i].text.slice(0,30),strategy:'fuzzy-high',score:bs,cursor:Math.max(cursor,advance),jumpDist:bp-cursor});cursor=Math.max(cursor,advance);consecutiveMisses=0;
         } else {
           // Medium confidence: accept position but limit cursor advance
           // Don't let cursor jump more than 3x cue length ahead of current position
           const maxJump=cn.length*3;
           if(bp-cursor<=maxJump){
-            cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,advance);consecutiveMisses=0;
+            cuePos.push({pos:bp,score:bs});if(DBG)dbgLog.push({cue:i,text:this.cues[i].text.slice(0,30),strategy:'fuzzy-med',score:bs,cursor:Math.max(cursor,advance),jumpDist:bp-cursor});cursor=Math.max(cursor,advance);consecutiveMisses=0;
           } else {
             // Too far ahead for a low-confidence match — treat as miss
-            // Minimal cursor advance (1 char) to prevent cascading miss failures
             cursor=Math.min(searchText.length,cursor+1);
-            cuePos.push({pos:cursor,score:0});consecutiveMisses++;
+            cuePos.push({pos:cursor,score:0});if(DBG)dbgLog.push({cue:i,text:this.cues[i].text.slice(0,30),strategy:'MISS(far-jump)',score:bs,jumpDist:bp-cursor,misses:consecutiveMisses+1});consecutiveMisses++;
           }
         }
       }
       else{
         // No match at all — minimal cursor advance
         cursor=Math.min(searchText.length,cursor+1);
-        cuePos.push({pos:cursor,score:0});consecutiveMisses++;
+        cuePos.push({pos:cursor,score:0});if(DBG)dbgLog.push({cue:i,text:this.cues[i].text.slice(0,30),strategy:'MISS',score:bs,misses:consecutiveMisses+1});consecutiveMisses++;
       }
       // Re-anchoring: after 2+ consecutive misses, try a wider global search
       // to find where the VTT text picks up again in the article
       if(consecutiveMisses>=2&&i+1<this.cues.length){
+        let reanchored=false;
         // Look ahead at next few cues and try to find a strong match anywhere after cursor
         for(let look=1;look<=Math.min(3,this.cues.length-i-1);look++){
           const nextCn=norm(this.cues[i+look].text);
           if(!nextCn||nextCn.length<3)continue;
           // Search the full remaining text
           const gep=searchText.indexOf(nextCn,cursor);
-          if(gep>=0){cursor=gep;consecutiveMisses=0;break;}
+          if(gep>=0){if(DBG)dbgLog.push({cue:i,text:'RE-ANCHOR(exact)',look,target:this.cues[i+look].text.slice(0,30),newCursor:gep});cursor=gep;consecutiveMisses=0;reanchored=true;break;}
           // Try fuzzy global search in remaining text
           let gbp=-1,gbs=0;
           const gse=Math.min(searchText.length,cursor+2000);
@@ -2305,8 +2308,9 @@ const TTS={
             const sc=charSim(nextCn,w);
             if(sc>gbs){gbs=sc;gbp=p;if(sc>=0.95)break;}
           }
-          if(gbs>=0.7&&gbp>=0){cursor=gbp;consecutiveMisses=0;break;}
+          if(gbs>=0.7&&gbp>=0){if(DBG)dbgLog.push({cue:i,text:'RE-ANCHOR(fuzzy)',look,target:this.cues[i+look].text.slice(0,30),score:gbs,newCursor:gbp});cursor=gbp;consecutiveMisses=0;reanchored=true;break;}
         }
+        if(DBG&&!reanchored)dbgLog.push({cue:i,text:'RE-ANCHOR-FAILED',misses:consecutiveMisses});
       }
     }
     // Phase 2: Convert positions to segment indices
@@ -2367,6 +2371,29 @@ const TTS={
       segTimes[segTimes.length-1].end=this.cues[this.cues.length-1].end;
     }
     this._segTimeRanges=segTimes;
+    // Debug: detailed per-cue alignment log for TTS
+    if(DBG&&dbgLog.length>0){
+      console.groupCollapsed('[tts][debug] Per-cue alignment details ('+dbgLog.length+' entries)');
+      const stratCount={};
+      for(const d of dbgLog){const s=String(d.strategy);stratCount[s]=(stratCount[s]||0)+1;}
+      console.log('[tts][debug] Strategy distribution:',stratCount);
+      console.table(dbgLog.map(d=>({
+        '#':d.cue,
+        text:d.text,
+        strategy:d.strategy,
+        score:typeof d.score==='number'?(d.score===1?'1':d.score.toFixed(3)):'-',
+        cursor:d.cursor||'-',
+        jump:d.jumpDist||'-',
+        misses:d.misses||'-'
+      })));
+      const misses=dbgLog.filter(d=>String(d.strategy).startsWith('MISS'));
+      if(misses.length>0){
+        console.groupCollapsed('[tts][debug] \u26a0 MISSES: '+misses.length+' cues');
+        for(const m of misses)console.log('  cue#'+m.cue+' "'+m.text+'" score='+((typeof m.score==='number')?m.score.toFixed(3):'-')+' misses='+m.misses);
+        console.groupEnd();
+      }
+      console.groupEnd();
+    }
   },
 
   // Parse WebVTT content
@@ -2701,6 +2728,8 @@ document.getElementById('ct').addEventListener('click',(e)=>{
 
 // ── 内嵌 MP3 字幕跟读 ─────────────────────────
 const InlineAudio={
+  // Debug mode: set InlineAudio.debug=true in console, or add ?debug=1 to URL
+  debug: new URLSearchParams(location.search).has('debug'),
   // Track active follow-along sessions: audioSrc -> {audio, cues, segments, segMap, segTimeRanges, btn, cleanup}
   active: new Map(),
 
@@ -2939,6 +2968,8 @@ const InlineAudio={
     const segMap=[];
     const segTimeRanges=[];
     if(!cues.length||!segments.length)return{segMap,segTimeRanges};
+    const DBG=this.debug;
+    const dbgLog=[];  // collect per-cue debug entries
 
     /* -- Robust text-matching with intro detection & divergence recovery --
        The audio may differ from article text (ASR errors, extra spoken content,
@@ -3041,8 +3072,10 @@ const InlineAudio={
       if(found){introEnd=i;break;}
     }
     // Assign all cues before introEnd to segment 0
+    if(DBG&&introEnd>0)console.log('[inline-audio][debug] intro detected: cues 0-'+(introEnd-1)+' assigned to seg 0');
     for(let i=0;i<introEnd;i++){
       segMap.push(0);
+      if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'intro',seg:0,score:0,cursor:0});
     }
 
     // Phase 2: Forward-matching from introEnd onward
@@ -3102,10 +3135,13 @@ const InlineAudio={
             }
             if(acceptMatch){
               segMap.push(seg);
+              if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'exact',seg,score:1,cursor:pos+cn.length,jumpDist:pos-cursor,segText:segments[seg].text.slice(0,30)});
               cursor=pos+cn.length;
               lastSeg=seg;
               matched=true;
               consecutiveMisses=0;
+            } else if(DBG){
+              dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'exact-rejected',reason:'lookahead failed',jumpDist:pos-cursor,score:1});
             }
           }
         }
@@ -3155,12 +3191,15 @@ const InlineAudio={
             }
             if(checked===0||validated>0){
               const seg=posToSeg(matchCenter);
-              if(seg>=lastSeg){segMap.push(seg);cursor=bestPos+cn.length;lastSeg=seg;matched=true;consecutiveMisses=0;}
+              if(seg>=lastSeg){segMap.push(seg);if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'lcs-validated',seg,score:bestScore,cursor:bestPos+cn.length,jumpDist:bestPos-cursor,segText:segments[seg].text.slice(0,30)});cursor=bestPos+cn.length;lastSeg=seg;matched=true;consecutiveMisses=0;}
+            } else if(DBG){
+              dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'lcs-rejected',reason:'lookahead failed (far jump)',score:bestScore,jumpDist:bestPos-cursor});
             }
           } else {
             const seg=posToSeg(matchCenter);
             if(seg>=lastSeg){
               segMap.push(seg);
+              if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'lcs',seg,score:bestScore,cursor:bestPos+cn.length,jumpDist:bestPos-cursor,segText:segments[seg].text.slice(0,30)});
               cursor=bestPos+cn.length;
               lastSeg=seg;
               matched=true;
@@ -3179,6 +3218,7 @@ const InlineAudio={
           const seg=posToSeg(pos);
           if(seg>=lastSeg){
             segMap.push(seg);
+            if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'recovery-exact',seg,score:1,cursor:pos+cn.length,misses:consecutiveMisses,segText:segments[seg].text.slice(0,30)});
             cursor=pos+cn.length;
             lastSeg=seg;
             matched=true;
@@ -3200,6 +3240,7 @@ const InlineAudio={
             const seg=posToSeg(bestPos+Math.floor(cn.length/2));
             if(seg>=lastSeg){
               segMap.push(seg);
+              if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'recovery-lcs',seg,score:bestScore,cursor:bestPos+cn.length,misses:consecutiveMisses,segText:segments[seg].text.slice(0,30)});
               cursor=bestPos+cn.length;
               lastSeg=seg;
               matched=true;
@@ -3220,9 +3261,11 @@ const InlineAudio={
         const curSeg=posToSeg(cursor);
         if(curSeg>lastSeg){
           segMap.push(curSeg);
+          if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'MISS',seg:curSeg,score:0,cursor,misses:consecutiveMisses+1,segText:segments[curSeg].text.slice(0,30)});
           lastSeg=curSeg;
         }else{
           segMap.push(lastSeg);
+          if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'MISS',seg:lastSeg,score:0,cursor,misses:consecutiveMisses+1});
         }
         consecutiveMisses++;
       }
@@ -3307,6 +3350,46 @@ const InlineAudio={
     if(emptySeg.length>0)console.log('[inline-audio] segments with NO cues (interpolated time):',emptySeg.join(','),'out of',n);
     // Log time ranges
     console.log('[inline-audio] segTimeRanges:',segTimeRanges.map((r,i)=>i+':'+r.start.toFixed(1)+'-'+r.end.toFixed(1)).join(' | '));
+
+    // Debug: detailed per-cue alignment log
+    if(DBG&&dbgLog.length>0){
+      console.groupCollapsed('[inline-audio][debug] Per-cue alignment details ('+dbgLog.length+' entries)');
+      // Strategy distribution
+      const stratCount={};
+      for(const d of dbgLog){stratCount[d.strategy]=(stratCount[d.strategy]||0)+1;}
+      console.log('[inline-audio][debug] Strategy distribution:',stratCount);
+      // Show all entries as table
+      console.table(dbgLog.map(d=>({
+        '#':d.cue,
+        text:d.text,
+        strategy:d.strategy,
+        seg:d.seg,
+        score:typeof d.score==='number'?d.score.toFixed(3):'-',
+        cursor:d.cursor,
+        jump:d.jumpDist||'-',
+        misses:d.misses||'-',
+        segText:d.segText||'-'
+      })));
+      // Highlight misses
+      const misses=dbgLog.filter(d=>d.strategy==='MISS');
+      if(misses.length>0){
+        console.groupCollapsed('[inline-audio][debug] ⚠ MISSES: '+misses.length+' cues unmatched');
+        for(const m of misses){
+          console.log('  cue#'+m.cue+' "'+m.text+'" → stuck at seg '+m.seg+' (consecutive misses: '+m.misses+')');
+        }
+        console.groupEnd();
+      }
+      // Segments overview: which segments got how many cues
+      const segCueCounts=new Array(n).fill(0);
+      for(const si of segMap)segCueCounts[si]++;
+      console.groupCollapsed('[inline-audio][debug] Segment cue distribution');
+      for(let i=0;i<n;i++){
+        const tag=segFirst[i]===null?'(EMPTY)':segCueCounts[i]+' cues';
+        console.log('  seg#'+i+': '+tag+' ['+segTimeRanges[i].start.toFixed(1)+'s-'+segTimeRanges[i].end.toFixed(1)+'s] "'+segments[i].text.slice(0,40)+'"');
+      }
+      console.groupEnd();
+      console.groupEnd();
+    }
 
     return{segMap,segTimeRanges};
   }
