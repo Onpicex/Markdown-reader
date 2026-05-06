@@ -3362,8 +3362,10 @@ const InlineAudio={
         const cueTime=cues[i].start;
         const timeRatio=cueTime/totalDuration;
         const expectedPos=Math.floor(timeRatio*spokenLen);
-        // Gentle pull toward expected position, max 2% of text per miss
-        const maxAdvance=Math.max(5,Math.floor(spokenLen*0.02));
+        // Gentle pull toward expected position
+        // Cap at ~1.5x the average chars-per-cue to prevent overshooting
+        const avgCharsPerCue=Math.max(5,Math.floor(spokenLen/effectiveCueCount));
+        const maxAdvance=Math.floor(avgCharsPerCue*1.5);
         let newCursor=cursor;
         if(expectedPos>cursor){
           newCursor=cursor+Math.min(expectedPos-cursor,maxAdvance);
