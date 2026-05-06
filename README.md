@@ -222,6 +222,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 - **倍速控制** — 0.6x / 0.8x / 1.0x / 1.2x / 1.5x / 2.0x 循环切换
 - **播放/暂停/停止** — 完整播放控制，也可点击高亮段落切换暂停/继续
 - **智能缓存** — 同一篇文章只生成一次音频，后续播放直接使用缓存
+- **一键从选中处听** — 选中文字 → 点击「🎵 从此处听(MP3)」自动开启跟读并跳到对应位置，无需预先手动激活
 
 技术实现：服务端调用 edge-tts 生成 MP3 + WebVTT 字幕文件，前端通过 `<audio>` 播放并解析 VTT 时间戳，用文本对齐算法精确映射到 DOM 段落。
 
@@ -252,7 +253,10 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 - TTS 音频缓存在 `/tmp/obsidian-reader-tts/`，基于文章内容哈希命名，缓存 7 天自动清理
 - TTS 音频服务支持 HTTP Range 请求（206 Partial Content），确保浏览器 seek 到任意位置
 - Vault 音频/视频文件支持 HTTP Range 请求（206 Partial Content），使用 `fs.createReadStream` 流式传输
-- InlineAudio 字幕跟读使用模糊字符匹配算法（charSim），处理 ASR 识别误差，自动检测开头介绍部分
+- InlineAudio 字幕跟读使用模糊字符匹配算法（charSim + LCS 滑动窗口），处理 ASR 识别误差，自动检测开头介绍部分
+- 字幕对齐算法采用匹配中心定位，miss 时最小 cursor 推进（1 字符）防止级联失败，连续 2 次失败自动重锚
+- VTT 解析阶段自动清理零时长 cue、重复文本 cue、Whisper 幻觉
+- 段落时间范围采用比例插值填补 + 连续化处理（无间隙无重叠），二分查找 + 正向锁定防止回跳
 - 笔记系统支持两种存储格式：`## [[title]]` 分节和 `---` 分隔块，向后兼容
 - 主题存储在 localStorage，三种主题：light / dark / eye-care
 - fs.watch 递归监听 vault 目录变更，2 秒防抖后自动 rescan + SSE 推送
