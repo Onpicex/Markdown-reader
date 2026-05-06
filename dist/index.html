@@ -2275,16 +2275,20 @@ const TTS={
             cuePos.push({pos:bp,score:bs});cursor=Math.max(cursor,advance);consecutiveMisses=0;
           } else {
             // Too far ahead for a low-confidence match — treat as miss
+            // Minimal cursor advance (1 char) to prevent cascading miss failures
+            cursor=Math.min(searchText.length,cursor+1);
             cuePos.push({pos:cursor,score:0});consecutiveMisses++;
           }
         }
       }
       else{
+        // No match at all — minimal cursor advance
+        cursor=Math.min(searchText.length,cursor+1);
         cuePos.push({pos:cursor,score:0});consecutiveMisses++;
       }
-      // Re-anchoring: after 3+ consecutive misses, try a wider global search
+      // Re-anchoring: after 2+ consecutive misses, try a wider global search
       // to find where the VTT text picks up again in the article
-      if(consecutiveMisses>=3&&i+1<this.cues.length){
+      if(consecutiveMisses>=2&&i+1<this.cues.length){
         // Look ahead at next few cues and try to find a strong match anywhere after cursor
         for(let look=1;look<=Math.min(3,this.cues.length-i-1);look++){
           const nextCn=norm(this.cues[i+look].text);
@@ -2328,13 +2332,39 @@ const TTS={
         segTimes[si].end=Math.max(segTimes[si].end,this.cues[i].end);
       }
     }
-    // Fill gaps: segments with no cues inherit from neighbors
+    // Fill gaps: interpolate proportionally between neighboring segments
     for(let i=0;i<segTimes.length;i++){
       if(!segTimes[i]){
-        const prev=i>0&&segTimes[i-1]?segTimes[i-1].end:0;
-        const next=segTimes.find((s,j)=>j>i&&s);
-        segTimes[i]={start:prev,end:next?next.start:prev+0.1};
+        let prevIdx=-1,nextIdx=-1;
+        for(let j=i-1;j>=0;j--){if(segTimes[j]){prevIdx=j;break;}}
+        for(let j=i+1;j<segTimes.length;j++){if(segTimes[j]){nextIdx=j;break;}}
+        if(prevIdx>=0&&nextIdx>=0){
+          const gap=segTimes[nextIdx].start-segTimes[prevIdx].end;
+          const spans=nextIdx-prevIdx;
+          const off=i-prevIdx;
+          segTimes[i]={start:segTimes[prevIdx].end+gap*(off-0.5)/spans,end:segTimes[prevIdx].end+gap*(off+0.5)/spans};
+        }else if(prevIdx>=0){
+          segTimes[i]={start:segTimes[prevIdx].end,end:segTimes[prevIdx].end+0.5};
+        }else if(nextIdx>=0){
+          segTimes[i]={start:Math.max(0,segTimes[nextIdx].start-0.5),end:segTimes[nextIdx].start};
+        }else{
+          segTimes[i]={start:0,end:this.cues[this.cues.length-1].end};
+        }
       }
+    }
+    // Make ranges continuous: no gaps, no overlaps
+    for(let i=1;i<segTimes.length;i++){
+      if(segTimes[i].start>segTimes[i-1].end){
+        const mid=(segTimes[i-1].end+segTimes[i].start)/2;
+        segTimes[i-1].end=mid;
+        segTimes[i].start=mid;
+      }else if(segTimes[i].start<segTimes[i-1].end){
+        segTimes[i].start=segTimes[i-1].end;
+      }
+    }
+    if(segTimes.length>0){
+      segTimes[0].start=0;
+      segTimes[segTimes.length-1].end=this.cues[this.cues.length-1].end;
     }
     this._segTimeRanges=segTimes;
   },
@@ -2553,16 +2583,36 @@ const TTS={
     ttsProgressFill.style.width=((t/dur)*100)+'%';
     // Update time display
     ttsInfo.textContent=this.formatTime(t)+' / '+this.formatTime(dur);
-    // Find which segment the current time falls into (using VTT-derived ranges)
+    // Find which segment the current time falls into
+    // Use binary search for efficiency, then allow forward-only progression
+    const ranges=this._segTimeRanges;
     let sIdx=-1;
-    for(let i=0;i<this._segTimeRanges.length;i++){
-      if(t>=this._segTimeRanges[i].start&&t<this._segTimeRanges[i].end){sIdx=i;break;}
+    // Binary search: find the last segment whose start <= t
+    let lo=0,hi=ranges.length-1;
+    while(lo<=hi){
+      const mid=(lo+hi)>>1;
+      if(ranges[mid].start<=t)lo=mid+1;
+      else hi=mid-1;
     }
-    // Fallback: if past all ranges, highlight last segment
-    if(sIdx<0&&this._segTimeRanges.length>0){
-      const last=this._segTimeRanges[this._segTimeRanges.length-1];
-      if(t>=last.start)sIdx=this._segTimeRanges.length-1;
+    // hi is now the last segment with start<=t
+    if(hi>=0){
+      // Check if t is within this segment's range
+      if(t<ranges[hi].end){sIdx=hi;}
+      // If t >= end, we're in a gap or past this segment — snap to next
+      else if(hi+1<ranges.length){sIdx=hi+1;}
+      else{sIdx=hi;} // past everything, stay on last
+    }else if(ranges.length>0){
+      sIdx=0; // before first segment starts
     }
+    // Enforce forward-only: never go backwards (except on explicit seek)
+    if(sIdx>=0){
+      // Detect seek: time jumped backwards significantly
+      const isSeeking=this._lastTime!==undefined&&t<this._lastTime-1.0;
+      if(!isSeeking&&this.curCueIdx>=0&&sIdx<this.curCueIdx){
+        sIdx=this.curCueIdx; // prevent backward jumps during normal playback
+      }
+    }
+    this._lastTime=t;
     if(sIdx>=0&&sIdx!==this.curCueIdx){
       this.curCueIdx=sIdx;
       this.highlightSegment(this.segments[sIdx]);
@@ -2708,16 +2758,30 @@ const InlineAudio={
       const {segMap,segTimeRanges}=this.buildSegMap(cues,segments);
       // Set up timeupdate listener
       let curIdx=-1;
+      let lastT=-1;
       const onTimeUpdate=()=>{
         const t=audio.currentTime;
         let sIdx=-1;
-        for(let i=0;i<segTimeRanges.length;i++){
-          if(segTimeRanges[i]&&t>=segTimeRanges[i].start&&t<segTimeRanges[i].end){sIdx=i;break;}
+        // Binary search: find the last segment whose start <= t
+        let lo=0,hi=segTimeRanges.length-1;
+        while(lo<=hi){
+          const mid=(lo+hi)>>1;
+          if(segTimeRanges[mid]&&segTimeRanges[mid].start<=t)lo=mid+1;
+          else hi=mid-1;
         }
-        if(sIdx<0&&segTimeRanges.length>0){
-          const last=segTimeRanges[segTimeRanges.length-1];
-          if(last&&t>=last.start)sIdx=segTimeRanges.length-1;
+        if(hi>=0){
+          if(segTimeRanges[hi]&&t<segTimeRanges[hi].end){sIdx=hi;}
+          else if(hi+1<segTimeRanges.length){sIdx=hi+1;}
+          else{sIdx=hi;}
+        }else if(segTimeRanges.length>0){
+          sIdx=0;
         }
+        // Forward-only unless explicit seek (time jumped back >1s)
+        if(sIdx>=0){
+          const isSeeking=lastT>=0&&t<lastT-1.0;
+          if(!isSeeking&&curIdx>=0&&sIdx<curIdx)sIdx=curIdx;
+        }
+        lastT=t;
         if(sIdx>=0&&sIdx!==curIdx){
           curIdx=sIdx;
           // Clear old highlights from this session
@@ -2997,30 +3061,66 @@ const InlineAudio={
 
       // Strategy 1: exact substring forward match
       if(cn.length>=2){
-        const maxSearch=(cn.length<=3)?Math.min(segFull.length,cursor+200):segFull.length;
+        // Limit search range for short cues to prevent false matches far ahead
+        // <=3 chars: cursor+200, 4-6 chars: cursor + len*50, 7+: full segFull
+        const maxSearch=(cn.length<=3)?Math.min(segFull.length,cursor+200)
+                       :(cn.length<=6)?Math.min(segFull.length,cursor+cn.length*50)
+                       :segFull.length;
         const pos=segFull.indexOf(cn,Math.max(0,cursor-5));
         if(pos>=0&&pos<maxSearch){
           const seg=posToSeg(pos);
           if(seg>=lastSeg){
-            segMap.push(seg);
-            cursor=pos+cn.length;
-            lastSeg=seg;
-            matched=true;
-            consecutiveMisses=0;
+            // Guard: short cues (<=6 chars) that jump far must be validated
+            // by checking that subsequent cues also match near the new position.
+            // Jump threshold scales with cue length: shorter = stricter.
+            let acceptMatch=true;
+            const jumpDist=pos-cursor;
+            const jumpThreshold=(cn.length<=3)?50:(cn.length<=6)?cn.length*12:Infinity;
+            if(cn.length<=6&&jumpDist>jumpThreshold){
+              // Look ahead at next few substantive cues to validate the jump
+              let validated=0,checked=0;
+              const lookCursor=pos+cn.length;
+              for(let la=1;la<=5&&(i+la)<effectiveCueCount&&checked<3;la++){
+                const laCn=cueNorms[i+la];
+                if(!laCn||laCn.length<3)continue;
+                checked++;
+                // Check if this future cue can be found near the proposed position
+                const laSearchEnd=Math.min(segFull.length,lookCursor+laCn.length*5+80);
+                const laPos=segFull.indexOf(laCn,lookCursor);
+                if(laPos>=0&&laPos<laSearchEnd){validated++;continue;}
+                // Try fuzzy
+                let laFound=false;
+                const laBuf=Math.max(3,Math.min(8,Math.ceil(laCn.length*0.35)));
+                for(let p=lookCursor;p<laSearchEnd-laCn.length+1;p++){
+                  const w=segFull.slice(p,p+laCn.length+laBuf);
+                  if(lcsRatio(laCn,w)>=0.6){laFound=true;break;}
+                }
+                if(laFound)validated++;
+              }
+              // If we checked at least 1 future cue and none validated, reject
+              if(checked>0&&validated===0)acceptMatch=false;
+            }
+            if(acceptMatch){
+              segMap.push(seg);
+              cursor=pos+cn.length;
+              lastSeg=seg;
+              matched=true;
+              consecutiveMisses=0;
+            }
           }
         }
       }
 
       // Strategy 2: LCS-based sliding window fuzzy match
-      if(!matched&&cn.length>=4){
+      if(!matched&&cn.length>=3){
         // Wider search window when we've had consecutive misses (audio-article divergence)
-        const baseWindow=cn.length+20;
-        const missMultiplier=Math.min(8,3+consecutiveMisses);
+        const baseWindow=cn.length+30;
+        const missMultiplier=Math.min(10,3+consecutiveMisses);
         const searchEnd=Math.min(segFull.length,cursor+baseWindow*missMultiplier);
         let bestPos=-1,bestScore=0;
-        const step=cn.length<=6?1:2; // optimization: larger step for longer cues
-        // Window buffer scales with cue length to avoid penalizing short cues
-        const winBuf=Math.max(2,Math.min(6,Math.ceil(cn.length*0.25)));
+        const step=1; // use step=1 for all cue lengths to avoid skipping matches
+        // Window buffer: slightly larger to capture ASR variations
+        const winBuf=Math.max(3,Math.min(8,Math.ceil(cn.length*0.35)));
         for(let p=Math.max(0,cursor-5);p<searchEnd-cn.length+1;p+=step){
           const wEnd=Math.min(p+cn.length+winBuf,segFull.length);
           const w=segFull.slice(p,wEnd);
@@ -3028,21 +3128,37 @@ const InlineAudio={
           if(sc>bestScore){bestScore=sc;bestPos=p;}
           if(sc>=0.9)break; // good enough, stop early
         }
-        // Use HIGHER threshold when there are consecutive misses to avoid false re-anchoring
-        // Short normalized cues (<=6 chars after removing numbers/punctuation) need even higher
-        // threshold since common chars like 的/有/和 match too easily
-        let threshold=0.55;
-        if(cn.length<=6)threshold=0.7; // very short cues need high confidence
-        else if(consecutiveMisses>=3)threshold=0.65; // during divergence, be strict
+        // Adaptive threshold: short cues need higher confidence,
+        // but not so high that ASR errors cause constant misses
+        let threshold=0.5;
+        if(cn.length<=4)threshold=0.65; // very short: somewhat strict
+        else if(cn.length<=6)threshold=0.55; // short: moderate
+        // During consecutive misses, keep threshold reasonable to allow recovery
+        if(consecutiveMisses>=2&&threshold>0.55)threshold=0.55;
         if(bestScore>=threshold&&bestPos>=0){
-          // Additional guard: don't let a medium-confidence match jump too far
+          // Use match CENTER for segment assignment to avoid cross-boundary false matches
+          // When the sliding window spans a segment boundary, bestPos may fall in the
+          // previous segment even though the cue really belongs to the next one.
+          const matchCenter=bestPos+Math.floor(cn.length/2);
+          // Guard: don't let a low-confidence match jump too far
           const jumpDist=bestPos-cursor;
-          const maxReasonableJump=cn.length*6;
-          if(bestScore<0.75&&jumpDist>maxReasonableJump){
-            // Suspicious: low-confidence match that's very far ahead
-            // Don't accept — let it fall through to Strategy 3 recovery
+          const maxReasonableJump=cn.length*8;
+          if(bestScore<0.7&&jumpDist>maxReasonableJump){
+            // Suspicious: low-confidence match far ahead — validate with lookahead
+            let validated=0,checked=0;
+            for(let la=1;la<=3&&(i+la)<effectiveCueCount&&checked<2;la++){
+              const laCn=cueNorms[i+la];
+              if(!laCn||laCn.length<3)continue;
+              checked++;
+              const laPos=segFull.indexOf(laCn,bestPos+cn.length);
+              if(laPos>=0&&laPos<bestPos+cn.length+laCn.length*5){validated++;}
+            }
+            if(checked===0||validated>0){
+              const seg=posToSeg(matchCenter);
+              if(seg>=lastSeg){segMap.push(seg);cursor=bestPos+cn.length;lastSeg=seg;matched=true;consecutiveMisses=0;}
+            }
           } else {
-            const seg=posToSeg(bestPos);
+            const seg=posToSeg(matchCenter);
             if(seg>=lastSeg){
               segMap.push(seg);
               cursor=bestPos+cn.length;
@@ -3054,9 +3170,9 @@ const InlineAudio={
         }
       }
 
-      // Strategy 3: Recovery — if many consecutive misses, try a broad search
+      // Strategy 3: Recovery — trigger earlier (2 consecutive misses)
       // to re-anchor alignment (audio may have extra content not in article)
-      if(!matched&&consecutiveMisses>=4&&cn.length>=4){
+      if(!matched&&consecutiveMisses>=2&&cn.length>=3){
         // Search the entire remaining segFull for this cue
         const pos=segFull.indexOf(cn,cursor);
         if(pos>=0){
@@ -3070,18 +3186,18 @@ const InlineAudio={
           }
         }
         if(!matched){
-          // Try LCS over broader range
-          const broadEnd=Math.min(segFull.length,cursor+cn.length*30);
-          const bWinBuf=Math.max(2,Math.min(6,Math.ceil(cn.length*0.25)));
+          // Try LCS over broader range — scale with misses for faster recovery
+          const broadEnd=Math.min(segFull.length,cursor+cn.length*40+consecutiveMisses*100);
+          const bWinBuf=Math.max(3,Math.min(8,Math.ceil(cn.length*0.35)));
           let bestPos=-1,bestScore=0;
-          for(let p=cursor;p<broadEnd-cn.length+1;p+=2){
+          for(let p=cursor;p<broadEnd-cn.length+1;p++){
             const w=segFull.slice(p,p+cn.length+bWinBuf);
             const sc=lcsRatio(cn,w);
             if(sc>bestScore){bestScore=sc;bestPos=p;}
             if(sc>=0.85)break;
           }
           if(bestScore>=0.45&&bestPos>=0){
-            const seg=posToSeg(bestPos);
+            const seg=posToSeg(bestPos+Math.floor(cn.length/2));
             if(seg>=lastSeg){
               segMap.push(seg);
               cursor=bestPos+cn.length;
@@ -3093,10 +3209,14 @@ const InlineAudio={
         }
       }
 
-      // Strategy 4: if still unmatched, stay on lastSeg
+      // Strategy 4: if still unmatched, do minimal cursor advance
+      // Key insight: aggressive cursor advance on miss causes cascading failures
+      // because subsequent cues' search windows start past their actual match positions.
+      // Let Strategy 3 (recovery) handle big jumps; here just nudge cursor forward.
       if(!matched){
-        // Try to assign to the next segment if cursor is near a boundary
-        // (handles case where audio is ahead of cursor in article)
+        // Minimal advance: just move by 1 character to prevent total stagnation
+        // The search window in Strategy 2 already grows with consecutiveMisses
+        cursor=Math.min(segFull.length,cursor+1);
         const curSeg=posToSeg(cursor);
         if(curSeg>lastSeg){
           segMap.push(curSeg);
@@ -3170,6 +3290,23 @@ const InlineAudio={
     }
     segTimeRanges[0].start=0;
     segTimeRanges[n-1].end=cues[cues.length-1].end;
+
+    // Debug: log alignment quality
+    let matchedCount=0,missCount=0;
+    for(let i=introEnd;i<effectiveCueCount;i++){
+      // A cue is "matched" if its segMap entry differs from its predecessor's
+      // or if it's the first one
+      if(i===introEnd||segMap[i]!==segMap[i-1])matchedCount++;
+    }
+    missCount=effectiveCueCount-introEnd-matchedCount;
+    const pct=effectiveCueCount>0?((matchedCount/(effectiveCueCount-introEnd))*100).toFixed(1):'0';
+    console.log('[inline-audio] buildSegMap: '+effectiveCueCount+' cues, '+n+' segments, intro='+introEnd+', matched transitions='+matchedCount+', stayed='+missCount+' ('+pct+'% transition rate)');
+    // Log segments with no cues (potential skip targets)
+    const emptySeg=[];
+    for(let i=0;i<n;i++){if(segFirst[i]===null)emptySeg.push(i);}
+    if(emptySeg.length>0)console.log('[inline-audio] segments with NO cues (interpolated time):',emptySeg.join(','),'out of',n);
+    // Log time ranges
+    console.log('[inline-audio] segTimeRanges:',segTimeRanges.map((r,i)=>i+':'+r.start.toFixed(1)+'-'+r.end.toFixed(1)).join(' | '));
 
     return{segMap,segTimeRanges};
   }

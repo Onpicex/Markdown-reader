@@ -12,3 +12,7 @@ node_modules/
 
 # Logs
 *.log
+
+# Debug/test scripts
+debug-*.mjs
+test-*.mjs
