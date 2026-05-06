@@ -457,6 +457,14 @@ mark.ann-flash{animation:annFlash .5s ease 3}
         <span style="font-size:13px;color:var(--text)">TTS 听书功能</span>
         <span id="cfgTtsLabel" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--gold);color:#fff">开</span>
       </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;margin-top:12px">
+        <span style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0">
+          <input type="checkbox" id="cfgDebug" style="opacity:0;width:0;height:0;position:absolute">
+          <span class="tts-slider" style="position:absolute;pointer-events:none;inset:0;background:var(--border);border-radius:24px;transition:.3s"></span>
+        </span>
+        <span style="font-size:13px;color:var(--text)">字幕对齐 Debug</span>
+        <span id="cfgDebugLabel" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--text-3);color:#fff">关</span>
+      </label>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:14px">
       <h3 style="font-size:14px;margin-bottom:12px">🔒 修改密码</h3>
@@ -1321,6 +1329,23 @@ cfgTts.addEventListener('change',async function(){
     cfgTts.checked=!enabled; // revert on failure
   }
 });
+// Debug toggle in settings
+const cfgDebug=$('cfgDebug'),cfgDebugLabel=$('cfgDebugLabel');
+function applyDebugSetting(on){
+  if(typeof TTS!=='undefined')TTS.debug=on;
+  if(typeof InlineAudio!=='undefined')InlineAudio.debug=on;
+  cfgDebug.checked=on;
+  cfgDebugLabel.textContent=on?'开':'关';
+  cfgDebugLabel.style.background=on?'var(--gold)':'var(--text-3)';
+  if(on)console.log('[debug] 字幕对齐 Debug 已开启 — 开启跟读后在 Console 查看详细日志');
+}
+cfgDebug.addEventListener('change',function(){
+  applyDebugSetting(cfgDebug.checked);
+  try{localStorage.setItem('subtitleDebug',cfgDebug.checked?'1':'0');}catch(e){}
+});
+// Restore debug setting from localStorage
+try{const sd=localStorage.getItem('subtitleDebug');if(sd==='1')applyDebugSetting(true);}catch(e){}
+
 settings.addEventListener('click',async function(){
   try{
     const r=await fetch('/api/config');
@@ -1328,6 +1353,11 @@ settings.addEventListener('click',async function(){
     cfgVault.value=d.vault||'';
     cfgTts.checked=d.ttsEnabled!==false;
   }catch(e){}
+  // Sync debug toggle with current state
+  const debugOn=(typeof InlineAudio!=='undefined'&&InlineAudio.debug)||(typeof TTS!=='undefined'&&TTS.debug);
+  cfgDebug.checked=debugOn;
+  cfgDebugLabel.textContent=debugOn?'开':'关';
+  cfgDebugLabel.style.background=debugOn?'var(--gold)':'var(--text-3)';
   modalBg.classList.add('on');
 });
 cfgCancel.addEventListener('click',()=>modalBg.classList.remove('on'));
