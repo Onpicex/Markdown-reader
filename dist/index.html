@@ -3112,6 +3112,9 @@ const InlineAudio={
     let cursor=0;   // position in segFull
     let lastSeg=0;  // monotonic segment tracker
     let consecutiveMisses=0; // track failed matches for recovery
+    // Time-proportional cursor advance: when cues miss, estimate position from timing
+    const totalDuration=cues[effectiveCueCount-1]?cues[effectiveCueCount-1].end:1;
+    const spokenLen=segFull.length;
 
     for(let i=introEnd;i<effectiveCueCount;i++){
       const cn=cueNorms[i];
@@ -3351,22 +3354,31 @@ const InlineAudio={
         }
       }
 
-      // Strategy 4: if still unmatched, do minimal cursor advance
-      // Key insight: aggressive cursor advance on miss causes cascading failures
-      // because subsequent cues' search windows start past their actual match positions.
-      // Let Strategy 3 (recovery) handle big jumps; here just nudge cursor forward.
+      // Strategy 4: Time-proportional cursor advance on miss
+      // Instead of +1 (too slow, cursor gets stuck) or big jumps (cascading failures),
+      // estimate where cursor SHOULD be based on audio timing ratio.
+      // If cue is at 30% of audio duration, cursor should be near 30% of text length.
       if(!matched){
-        // Minimal advance: just move by 1 character to prevent total stagnation
-        // The search window in Strategy 2 already grows with consecutiveMisses
-        cursor=Math.min(segFull.length,cursor+1);
+        const cueTime=cues[i].start;
+        const timeRatio=cueTime/totalDuration;
+        const expectedPos=Math.floor(timeRatio*spokenLen);
+        // Gentle pull toward expected position, max 2% of text per miss
+        const maxAdvance=Math.max(5,Math.floor(spokenLen*0.02));
+        let newCursor=cursor;
+        if(expectedPos>cursor){
+          newCursor=cursor+Math.min(expectedPos-cursor,maxAdvance);
+        }else{
+          newCursor=cursor+1; // expected behind cursor, minimal advance
+        }
+        cursor=Math.min(segFull.length,newCursor);
         const curSeg=posToSeg(cursor);
         if(curSeg>lastSeg){
           segMap.push(curSeg);
-          if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'MISS',seg:curSeg,score:0,cursor,misses:consecutiveMisses+1,segText:segments[curSeg].text.slice(0,30)});
+          if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'MISS',seg:curSeg,score:0,cursor,misses:consecutiveMisses+1,expectedPos,timeRatio:timeRatio.toFixed(3),segText:segments[curSeg].text.slice(0,30)});
           lastSeg=curSeg;
         }else{
           segMap.push(lastSeg);
-          if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'MISS',seg:lastSeg,score:0,cursor,misses:consecutiveMisses+1});
+          if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'MISS',seg:lastSeg,score:0,cursor,misses:consecutiveMisses+1,expectedPos,timeRatio:timeRatio.toFixed(3)});
         }
         consecutiveMisses++;
       }
