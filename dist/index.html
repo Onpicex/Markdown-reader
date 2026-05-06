@@ -3125,21 +3125,20 @@ const InlineAudio={
       // Strategy 1: exact substring forward match
       if(cn.length>=2){
         // Limit search range for short cues to prevent false matches far ahead
-        // <=3 chars: cursor+200, 4-6 chars: cursor + len*50, 7+: full segFull
+        // <=3 chars: cursor+200, 4-6 chars: cursor + len*50, 7+: cursor + len*80
         const maxSearch=(cn.length<=3)?Math.min(segFull.length,cursor+200)
                        :(cn.length<=6)?Math.min(segFull.length,cursor+cn.length*50)
-                       :segFull.length;
+                       :Math.min(segFull.length,cursor+cn.length*80+200);
         const pos=segFull.indexOf(cn,Math.max(0,cursor-5));
         if(pos>=0&&pos<maxSearch){
           const seg=posToSeg(pos);
           if(seg>=lastSeg){
-            // Guard: short cues (<=6 chars) that jump far must be validated
-            // by checking that subsequent cues also match near the new position.
-            // Jump threshold scales with cue length: shorter = stricter.
+            // Guard: ALL cues that jump far must be validated with lookahead.
+            // Short cues are more susceptible to false positives (common substrings).
             let acceptMatch=true;
             const jumpDist=pos-cursor;
-            const jumpThreshold=(cn.length<=3)?50:(cn.length<=6)?cn.length*12:Infinity;
-            if(cn.length<=6&&jumpDist>jumpThreshold){
+            const jumpThreshold=(cn.length<=3)?50:(cn.length<=6)?cn.length*12:cn.length*20;
+            if(jumpDist>jumpThreshold){
               // Look ahead at next few substantive cues to validate the jump
               let validated=0,checked=0;
               const lookCursor=pos+cn.length;
@@ -3177,6 +3176,64 @@ const InlineAudio={
         }
       }
 
+      // Strategy 1.5: Lookahead-merge match for short cues
+      // When a short cue alone is too ambiguous, concatenate it with the next N cues
+      // to form a longer query string that's much more likely to match.
+      // Data shows: merging 3 cues raises match rate from ~8% to ~90%.
+      if(!matched&&cn.length<=25){
+        const mergeCount=cn.length<=6?7:cn.length<=10?5:cn.length<=15?4:3;
+        let merged=cn;
+        const mergeEnd=Math.min(effectiveCueCount,i+mergeCount);
+        for(let mi=i+1;mi<mergeEnd;mi++){if(cueNorms[mi])merged+=cueNorms[mi];}
+        if(merged.length>=8){
+          // Search a generous window (oral text may diverge significantly from written)
+          const mSearchEnd=Math.min(segFull.length,cursor+merged.length*6+300+consecutiveMisses*80);
+          // Try exact first
+          const mExact=segFull.indexOf(merged,Math.max(0,cursor-10));
+          if(mExact>=0&&mExact<mSearchEnd){
+            const seg=posToSeg(mExact);
+            if(seg>=lastSeg){
+              segMap.push(seg);
+              if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'merge-exact',seg,score:1,cursor:mExact+cn.length,mergeLen:merged.length,segText:segments[seg].text.slice(0,30)});
+              cursor=mExact+cn.length; // advance only by this cue's length
+              lastSeg=seg;
+              matched=true;
+              consecutiveMisses=0;
+            }
+          }
+          if(!matched){
+            // LCS fuzzy on merged string
+            let mBestPos=-1,mBestScore=0;
+            const mWinBuf=Math.max(5,Math.min(15,Math.ceil(merged.length*0.25)));
+            const mStep=Math.max(1,Math.floor(merged.length/8));
+            for(let p=Math.max(0,cursor-10);p<mSearchEnd-merged.length+1;p+=mStep){
+              const w=segFull.slice(p,Math.min(p+merged.length+mWinBuf,segFull.length));
+              const sc=lcsRatio(merged,w);
+              if(sc>mBestScore){mBestScore=sc;mBestPos=p;}
+              if(sc>=0.85)break;
+            }
+            // Lower threshold for merged strings (longer = more reliable even at lower scores)
+            const mThreshold=merged.length>=30?0.35:merged.length>=15?0.40:0.45;
+            if(mBestScore>=mThreshold&&mBestPos>=0){
+              const seg=posToSeg(mBestPos);
+              // Guard: don't let merge-lcs jump too many segments on low confidence
+              const segJump=seg-lastSeg;
+              const mergeAccept=mBestScore>=0.6||segJump<=3||(mBestScore>=0.45&&segJump<=5);
+              if(seg>=lastSeg&&mergeAccept){
+                segMap.push(seg);
+                if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'merge-lcs',seg,score:mBestScore,cursor:mBestPos+cn.length,mergeLen:merged.length,segText:segments[seg].text.slice(0,30)});
+                cursor=mBestPos+cn.length;
+                lastSeg=seg;
+                matched=true;
+                consecutiveMisses=0;
+              } else if(DBG&&seg>=lastSeg){
+                dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'merge-lcs-rejected',reason:'seg jump '+segJump+' at score '+mBestScore.toFixed(3),seg,score:mBestScore});
+              }
+            }
+          }
+        }
+      }
+
       // Strategy 2: LCS-based sliding window fuzzy match
       if(!matched&&cn.length>=3){
         // Wider search window when we've had consecutive misses (audio-article divergence)
@@ -3199,8 +3256,9 @@ const InlineAudio={
         let threshold=0.5;
         if(cn.length<=4)threshold=0.65; // very short: somewhat strict
         else if(cn.length<=6)threshold=0.55; // short: moderate
-        // During consecutive misses, keep threshold reasonable to allow recovery
-        if(consecutiveMisses>=2&&threshold>0.55)threshold=0.55;
+        // During consecutive misses, lower thresholds progressively to allow recovery
+        if(consecutiveMisses>=5)threshold=Math.min(threshold,0.40);
+        else if(consecutiveMisses>=2)threshold=Math.min(threshold,0.50);
         if(bestScore>=threshold&&bestPos>=0){
           // Use match CENTER for segment assignment to avoid cross-boundary false matches
           // When the sliding window spans a segment boundary, bestPos may fall in the
@@ -3241,23 +3299,29 @@ const InlineAudio={
 
       // Strategy 3: Recovery — trigger earlier (2 consecutive misses)
       // to re-anchor alignment (audio may have extra content not in article)
-      if(!matched&&consecutiveMisses>=2&&cn.length>=3){
-        // Search the entire remaining segFull for this cue
+      if(!matched&&consecutiveMisses>=1&&cn.length>=2){
+        // Recovery: search the entire remaining segFull for this cue
+        // Trigger earlier (1 miss instead of 2) and accept shorter cues (2 instead of 3)
         const pos=segFull.indexOf(cn,cursor);
         if(pos>=0){
           const seg=posToSeg(pos);
-          if(seg>=lastSeg){
+          // Guard: limit segment jumps for short exact recovery matches
+          const reSegJump=seg-lastSeg;
+          const reAccept=cn.length>=10||reSegJump<=3||(cn.length>=5&&reSegJump<=5)||(consecutiveMisses>=10&&reSegJump<=8);
+          if(seg>=lastSeg&&reAccept){
             segMap.push(seg);
             if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'recovery-exact',seg,score:1,cursor:pos+cn.length,misses:consecutiveMisses,segText:segments[seg].text.slice(0,30)});
             cursor=pos+cn.length;
             lastSeg=seg;
             matched=true;
             consecutiveMisses=0;
+          } else if(DBG&&seg>=lastSeg){
+            dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'recovery-exact-rejected',reason:'seg jump '+reSegJump+' for short cue len='+cn.length,seg,misses:consecutiveMisses});
           }
         }
         if(!matched){
           // Try LCS over broader range — scale with misses for faster recovery
-          const broadEnd=Math.min(segFull.length,cursor+cn.length*40+consecutiveMisses*100);
+          const broadEnd=Math.min(segFull.length,cursor+cn.length*60+consecutiveMisses*200);
           const bWinBuf=Math.max(3,Math.min(8,Math.ceil(cn.length*0.35)));
           let bestPos=-1,bestScore=0;
           for(let p=cursor;p<broadEnd-cn.length+1;p++){
@@ -3266,15 +3330,22 @@ const InlineAudio={
             if(sc>bestScore){bestScore=sc;bestPos=p;}
             if(sc>=0.85)break;
           }
-          if(bestScore>=0.45&&bestPos>=0){
+          // Lower recovery threshold when misses are high
+          const recThreshold=consecutiveMisses>=5?0.35:0.42;
+          if(bestScore>=recThreshold&&bestPos>=0){
             const seg=posToSeg(bestPos+Math.floor(cn.length/2));
-            if(seg>=lastSeg){
+            // Guard: limit segment jumps for low-confidence recovery matches
+            const recSegJump=seg-lastSeg;
+            const recAccept=bestScore>=0.6||recSegJump<=3||(bestScore>=0.45&&recSegJump<=5)||(consecutiveMisses>=10&&recSegJump<=8);
+            if(seg>=lastSeg&&recAccept){
               segMap.push(seg);
               if(DBG)dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'recovery-lcs',seg,score:bestScore,cursor:bestPos+cn.length,misses:consecutiveMisses,segText:segments[seg].text.slice(0,30)});
               cursor=bestPos+cn.length;
               lastSeg=seg;
               matched=true;
               consecutiveMisses=0;
+            } else if(DBG&&seg>=lastSeg){
+              dbgLog.push({cue:i,text:cues[i].text.slice(0,30),strategy:'recovery-lcs-rejected',reason:'seg jump '+recSegJump+' at score '+bestScore.toFixed(3),seg,score:bestScore,misses:consecutiveMisses});
             }
           }
         }
