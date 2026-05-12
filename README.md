@@ -16,6 +16,7 @@ Markdown 知识库阅读器,直接映射 Obsidian Vault 的目录结构和内容
 - 🎧 **TTS 听书** - Edge TTS 高品质语音朗读,实时段落高亮跟读,支持倍速调节,点击高亮段落可暂停/继续
 - 🎵 **MP3 字幕跟读** - 内嵌 MP3 音频逐段高亮跟读,智能模糊匹配算法对齐转录与原文,自动检测并跳过音频开头介绍
 - 🧠 **语义 Embedding 对齐** - 当口语讲稿与书面文章用词差异大时,自动启用 AI 语义匹配(bge-small-zh),匹配率从 33% 提升到 100%,完全本地运行不花钱
+- 🗣️ **对话感知对齐** - 连续短引号对话自动检测,预合并 + 字符级匹配 + 按文字长度比例分配时间,Whisper 幻觉丢失的对话段也能获得合理跟读时间
 - 🎯 **从选中处听** - 选中文字后一键跳转到对应音频位置播放(支持 TTS 和 MP3)
 - 🎵 **媒体播放** - 支持音频(mp3/wav/ogg/m4a)和视频(mp4/webm)内嵌播放
 - 🔗 **Wiki Link** - 支持 `[[链接]]` 站内跳转和 `![[文件]]` 嵌入
@@ -127,7 +128,7 @@ pip install sentence-transformers  # 可选,语义对齐
 - **扫描器**:`scan.py` 扫描 vault 生成 `catalog.json`(只含标题和路径,不含内容)
 - **TTS**:[Edge TTS](https://github.com/rany2/edge-tts) 生成语音 + WebVTT 字幕,前端实时高亮跟读
 - **转录**:mlx-whisper 本地转录 MP3 → VTT 字幕,前端模糊匹配对齐原文段落
-- **语义对齐**:`align.py` 用 [bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) embedding 模型计算 VTT 块与文章段落的余弦相似度,单调递增贪心分配 + 插值填补空段,结果缓存为 `.align.json`
+- **语义对齐**:`align.py` 用 [bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) embedding 模型计算 VTT 块与文章段落的余弦相似度,单调递增贪心分配 + 插值填补空段,结果缓存为 `.align.json`。对话运检测自动将连续短句合并为虚拟段,未映射段落按文字长度比例分配时间,缓存自动根据文章/VTT mtime 失效重生
 
 ## 快速开始
 
@@ -235,28 +236,30 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 
 ## 语义 Embedding 对齐
 
-MP3 字幕跟读时，当音频是口语讲稿而文章是书面版时（两者用词差异大），传统的字符匹配算法（LCS）只能达到 ~33% 的匹配率。
+MP3 字幕跟读时,当音频是口语讲稿而文章是书面版时(两者用词差异大),传统的字符匹配算法(LCS)只能达到 ~33% 的匹配率。
 
-本项目集成了 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) 语义 embedding 模型，将匹配率提升到 **100%**：
+本项目集成了 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) 语义 embedding 模型,将匹配率提升到 **100%**:
 
 | | LCS 字符匹配 | Embedding 语义匹配 |
 |---|---|---|
 | 口语 vs 书面 | ~33% | **100%** |
 | 段落命中 | 26/50 | **39/50** |
-| 首次加载 | 即时 | ~8s（模型加载） |
-| 后续加载 | 即时 | 即时（缓存） |
+| 首次加载 | 即时 | ~8s(模型加载) |
+| 后续加载 | 即时 | 即时(缓存) |
 
 ### 工作原理
 
 1. 将 VTT 字幕合并为 ~40 字的 chunk
-2. 用 embedding 模型编码所有 chunk 和文章段落
-3. 计算余弦相似度矩阵，贪心单调分配
-4. 插值填补未命中的段落，生成连续时间范围
-5. 结果缓存为 `.align.json`，后续请求直接读取
+2. 检测连续短段落(≤30字×≥3段,如引号对话),预合并为虚拟段提高 embedding 质量
+3. 用 embedding 模型编码所有 chunk 和(虚拟)段落
+4. 计算余弦相似度矩阵,贪心单调分配
+5. 对话运内部用字符级相似度拆回各小段
+6. 未映射段落按文字长度比例分配时间,当已映射段时间过多时自动再分配
+7. 结果缓存为 `.align.json`,服务端检测文章/VTT mtime 自动失效重生
 
 ### 降级策略
 
-如果未安装 `sentence-transformers` 或 embedding 服务不可用，前端自动降级为 LCS 字符匹配算法，不影响基本功能。
+如果未安装 `sentence-transformers` 或 embedding 服务不可用,前端自动降级为 LCS 字符匹配算法,不影响基本功能。
 
 ## 书摘分享
 
@@ -264,10 +267,10 @@ MP3 字幕跟读时，当音频是口语讲稿而文章是书面版时（两者�
 
 | 风格 | 特点 |
 |------|------|
-| ⚪ 简约白 | 白底 + 金色左边框 + 经典引号装饰 |
-| 📜 文艺纸 | 羊皮纸渐变 + 居中花饰 + 斜体排版 |
-| 🌙 暗夜 | 深色渐变 + 紫色左边框 + 冷调配色 |
-| 🌿 清新绿 | 浅绿渐变 + 绿色边框 + 自然感 |
+| 🖤 水墨 | 纯白底 + 深色文字,最简洁 |
+| ☕ 暖纸 | 暖色纸张底 + 暖调文字 |
+| 🌙 暗夜 | 深色底 + 浅色文字 |
+| 🌿 青白 | 淡青底 + 自然配色 |
 
 选中文字后浮条提供两个操作:
 - 「🎧 从此处听」- 直接从选中位置开始 TTS 播放
@@ -286,7 +289,7 @@ MP3 字幕跟读时，当音频是口语讲稿而文章是书面版时（两者�
 - TTS 音频服务支持 HTTP Range 请求(206 Partial Content),确保浏览器 seek 到任意位置
 - Vault 音频/视频文件支持 HTTP Range 请求(206 Partial Content),使用 `fs.createReadStream` 流式传输
 - InlineAudio 字幕跟读优先使用语义 Embedding 对齐(bge-small-zh-v1.5),失败时自动降级为 LCS 字符匹配算法(charSim + LCS 滑动窗口)
-- Embedding 对齐将 VTT cue 合并为 ~40 字 chunk,与文章段落计算余弦相似度,贪心单调分配,口语 vs 书面匹配率从 33% 提升到 100%
+- Embedding 对齐将 VTT cue 合并为 ~40 字 chunk，与文章段落计算余弦相似度，贪心单调分配，口语 vs 书面匹配率从 33% 提升到 100%。对话运检测自动将连续短句合并为虚拟段做 embedding，再用 char_similarity 拆回；未映射段落按文字长度比例分配时间，当已映射段时间过多时自动再分配给相邻未映射段
 - LCS 降级算法采用匹配中心定位,miss 时时间比例 cursor 推进防止级联失败,连续 2 次失败自动重锚
 - VTT 解析阶段自动清理零时长 cue、重复文本 cue、Whisper 幻觉
 - 段落时间范围采用比例插值填补 + 连续化处理(无间隙无重叠),二分查找 + 正向锁定防止回跳
@@ -305,16 +308,16 @@ MP3 字幕跟读时，当音频是口语讲稿而文章是书面版时（两者�
 
 ```
 Markdown-reader/
-├── config.example.json  — 配置模板
-├── config.json          — 配置（.gitignore 忽略）
-├── scan.py              — vault 扫描器（Python）
-├── align.py             — 语义 Embedding 对齐脚本（Python）
-├── server.js            — HTTP 服务器（Node.js）
-├── serve.sh             — 启动脚本：scan → server
+├── config.example.json  - 配置模板
+├── config.json          - 配置(.gitignore 忽略)
+├── scan.py              - vault 扫描器(Python)
+├── align.py             - 语义 Embedding 对齐脚本(Python)
+├── server.js            - HTTP 服务器(Node.js)
+├── serve.sh             - 启动脚本:scan → server
 └── dist/
-    ├── index.html       — SPA 前端
+    ├── index.html       - SPA 前端
     └── data/
-        └── catalog.json — 文章目录（自动生成，.gitignore 忽略）
+        └── catalog.json - 文章目录(自动生成,.gitignore 忽略)
 ```
 
 ## License
