@@ -237,61 +237,49 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .share-card-wrap{position:relative;max-width:92vw;max-height:78vh;overflow:visible}
 
 /* ── Card base ── */
-.share-card{width:400px;max-width:88vw;border-radius:14px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.25);padding:36px 30px 24px;position:relative;font-family:var(--font);transition:all .25s ease}
-.share-card .sc-quote{position:relative;margin-bottom:20px}
-.share-card .sc-text{font-size:16px;line-height:1.95;text-align:justify;position:relative;z-index:1}
-.share-card .sc-src{display:flex;align-items:center;gap:10px;padding-top:14px}
-.share-card .sc-src .sc-ico{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
-.share-card .sc-src .sc-info{flex:1;min-width:0}
-.share-card .sc-src .sc-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.share-card .sc-src .sc-from{font-size:10px;margin-top:2px;opacity:.6}
+.share-card{width:400px;max-width:88vw;border-radius:16px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.25);padding:40px 32px 28px;position:relative;font-family:var(--font);transition:all .25s ease}
+.share-card .sc-quote{position:relative;margin-bottom:0}
+.share-card .sc-text{font-size:16.5px;line-height:2;letter-spacing:.02em;position:relative;z-index:1;padding-left:4px}
+.share-card .sc-src{padding-top:20px;margin-top:20px}
+.share-card .sc-src .sc-title{font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.04em;text-align:right}
 
-/* ── Theme: Pure (简约白) ── */
+/* ── Theme: Ink (水墨) ── */
 .share-card.t-pure{background:#fff;color:#1a1a1a}
-.share-card.t-pure::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#D4A942,#B8860B,#D4A942)}
-.share-card.t-pure .sc-text{padding-left:16px;border-left:3px solid #D4A942;color:#2a2a2a}
-.share-card.t-pure .sc-quote::before{content:'\201C';position:absolute;top:-12px;left:-4px;font-size:52px;color:rgba(184,134,11,.15);font-family:Georgia,serif;line-height:1}
-.share-card.t-pure .sc-src{border-top:1px solid #f0f0f0}
-.share-card.t-pure .sc-ico{background:linear-gradient(135deg,#D4A942,#B8860B);color:#fff}
-.share-card.t-pure .sc-title{color:#353535}
-.share-card.t-pure .sc-from{color:#999}
+.share-card.t-pure .sc-text{color:#2a2a2a}
 
-/* ── Theme: Literary (文艺纸) ── */
-.share-card.t-literary{background:linear-gradient(170deg,#fdf8ef,#f5ecda);color:#3a2e1e}
-.share-card.t-literary .sc-text{padding:16px 20px;background:rgba(255,255,255,.45);border-radius:8px;color:#3a2e1e;font-style:italic}
-.share-card.t-literary .sc-quote::before{content:'\2766';position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:24px;color:rgba(160,120,60,.3)}
-.share-card.t-literary .sc-src{border-top:1px dashed rgba(160,120,60,.3)}
-.share-card.t-literary .sc-ico{background:rgba(160,120,60,.15);color:#8a6e3e}
-.share-card.t-literary .sc-title{color:#5a4a2e}
-.share-card.t-literary .sc-from{color:#a08860}
+.share-card.t-pure .sc-src{border-top:1px solid rgba(0,0,0,.06)}
+.share-card.t-pure .sc-title{color:#999;text-transform:uppercase}
 
-/* ── Theme: Dark (暗夜) ── */
-.share-card.t-dark{background:linear-gradient(170deg,#1e1e2a,#16161e);color:#e0e0e0}
-.share-card.t-dark .sc-text{padding-left:16px;border-left:3px solid #7b68ee;color:#ddd}
-.share-card.t-dark .sc-quote::before{content:'\201C';position:absolute;top:-12px;left:-4px;font-size:52px;color:rgba(123,104,238,.2);font-family:Georgia,serif;line-height:1}
-.share-card.t-dark .sc-src{border-top:1px solid rgba(255,255,255,.08)}
-.share-card.t-dark .sc-ico{background:linear-gradient(135deg,#7b68ee,#5b4ec7);color:#fff}
-.share-card.t-dark .sc-title{color:#e8e8e8}
-.share-card.t-dark .sc-from{color:#888}
+/* ── Theme: Warm (暖纸) ── */
+.share-card.t-literary{background:#faf6ef;color:#3a3028}
+.share-card.t-literary .sc-text{color:#3a3028}
 
-/* ── Theme: Green (清新绿) ── */
-.share-card.t-green{background:linear-gradient(170deg,#f0f7f0,#e2f0e2);color:#2a3a2a}
-.share-card.t-green .sc-text{padding-left:16px;border-left:3px solid #5aac5a;color:#2e3e2e}
-.share-card.t-green .sc-quote::before{content:'\2618';position:absolute;top:-14px;left:-2px;font-size:28px;color:rgba(90,172,90,.25);line-height:1}
-.share-card.t-green .sc-src{border-top:1px solid rgba(90,172,90,.2)}
-.share-card.t-green .sc-ico{background:linear-gradient(135deg,#5aac5a,#3e8a3e);color:#fff}
-.share-card.t-green .sc-title{color:#2e4a2e}
-.share-card.t-green .sc-from{color:#7a9a7a}
+.share-card.t-literary .sc-src{border-top:1px solid rgba(160,120,60,.1)}
+.share-card.t-literary .sc-title{color:#b8a080}
+
+/* ── Theme: Night (暗夜) ── */
+.share-card.t-dark{background:#1a1a22;color:#e0e0e0}
+.share-card.t-dark .sc-text{color:#d4d4d4}
+
+.share-card.t-dark .sc-src{border-top:1px solid rgba(255,255,255,.06)}
+.share-card.t-dark .sc-title{color:#777}
+
+/* ── Theme: Sage (青白) ── */
+.share-card.t-green{background:#f4f7f4;color:#2a332a}
+.share-card.t-green .sc-text{color:#2e3e2e}
+
+.share-card.t-green .sc-src{border-top:1px solid rgba(80,140,80,.08)}
+.share-card.t-green .sc-title{color:#8aaa8a}
 
 /* ── Theme switcher ── */
 .share-themes{display:flex;gap:8px;justify-content:center}
 .share-themes button{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:all .15s;box-shadow:0 1px 4px rgba(0,0,0,.15)}
 .share-themes button:hover{transform:scale(1.15)}
 .share-themes button.active{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.4),0 2px 8px rgba(0,0,0,.2)}
-.share-themes .st-pure{background:linear-gradient(135deg,#fff,#f5f0e8)}
-.share-themes .st-literary{background:linear-gradient(135deg,#fdf8ef,#e8d9b8)}
-.share-themes .st-dark{background:linear-gradient(135deg,#2a2a3a,#16161e)}
-.share-themes .st-green{background:linear-gradient(135deg,#e2f0e2,#aad4aa)}
+.share-themes .st-pure{background:#fff;border:1px solid #e0e0e0}
+.share-themes .st-literary{background:#faf6ef;border:1px solid #e8dcc8}
+.share-themes .st-dark{background:#1a1a22;border:1px solid #333}
+.share-themes .st-green{background:#f4f7f4;border:1px solid #d0ddd0}
 
 /* ── Action buttons ── */
 .share-actions{display:flex;gap:8px}
@@ -303,7 +291,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .share-actions .sa-close{background:rgba(255,255,255,.12);color:rgba(255,255,255,.8);border:1px solid rgba(255,255,255,.2)}
 .share-actions .sa-close:hover{background:rgba(255,255,255,.2);color:#fff}
 @media(max-width:420px){
-  .share-card{padding:28px 22px 20px}
+  .share-card{padding:32px 24px 22px}
   .share-card .sc-text{font-size:15px}
   .share-actions button{padding:8px 14px;font-size:12px}
   .share-actions{gap:6px}
@@ -589,19 +577,15 @@ mark.ann-flash{animation:annFlash .5s ease 3}
         <div class="sc-text" id="scText"></div>
       </div>
       <div class="sc-src">
-        <div class="sc-ico">📖</div>
-        <div class="sc-info">
-          <div class="sc-title" id="scTitle"></div>
-          <div class="sc-from">来自「知识库阅读器」</div>
-        </div>
+        <div class="sc-title" id="scTitle"></div>
       </div>
     </div>
   </div>
   <div class="share-themes" id="shareThemes">
-    <button class="st-pure active" data-theme="t-pure" title="简约白"></button>
-    <button class="st-literary" data-theme="t-literary" title="文艺纸"></button>
+    <button class="st-pure active" data-theme="t-pure" title="水墨"></button>
+    <button class="st-literary" data-theme="t-literary" title="暖纸"></button>
     <button class="st-dark" data-theme="t-dark" title="暗夜"></button>
-    <button class="st-green" data-theme="t-green" title="清新绿"></button>
+    <button class="st-green" data-theme="t-green" title="青白"></button>
   </div>
   <div class="share-actions">
     <button class="sa-copy" id="saCopy">📋 复制文字</button>
@@ -1641,7 +1625,7 @@ shareExcerpt.addEventListener('click',function(e){
   if(txt.length>500)txt=txt.slice(0,497)+'...';
   scText.textContent=txt;
   const titleEl=document.querySelector('.art-hd h1');
-  scTitle.textContent=titleEl?titleEl.textContent:'未知文章';
+  scTitle.textContent=titleEl?('—— '+titleEl.textContent):'—— 未知文章';
   shareOverlay.classList.add('on');
   shareBar.classList.remove('vis');
   window.getSelection().removeAllRanges();
@@ -1656,7 +1640,7 @@ shareOverlay.addEventListener('click',function(e){if(e.target===shareOverlay)clo
 saCopy.addEventListener('click',function(){
   const titleEl=document.querySelector('.art-hd h1');
   const title=titleEl?titleEl.textContent:'';
-  const copyStr=selectedText+'\n\n——'+title+'\n「知识库阅读器」';
+  const copyStr=selectedText+'\n\n—— '+title;
   navigator.clipboard.writeText(copyStr).then(()=>{
     saCopy.textContent='✓ 已复制';
     setTimeout(()=>{saCopy.textContent='📋 复制文字'},1500);
@@ -2824,6 +2808,11 @@ const InlineAudio={
         });
         const alignD=await alignR.json();
         if(alignD.ok&&alignD.segMap&&alignD.segTimeRanges){
+          // Validate: segTimeRanges length must match frontend segment count
+          if(alignD.segTimeRanges.length!==segments.length){
+            console.warn('[inline-audio] Alignment segment count mismatch: align='+alignD.segTimeRanges.length+' dom='+segments.length+', falling back to LCS');
+            throw new Error('segment count mismatch (align='+alignD.segTimeRanges.length+' dom='+segments.length+')');
+          }
           segMap=alignD.segMap;
           segTimeRanges=alignD.segTimeRanges;
           console.log('[inline-audio] Using embedding alignment:',alignD.stats||'cached');

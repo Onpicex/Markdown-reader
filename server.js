@@ -766,14 +766,21 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       // Cache: check for .align.json next to VTT
+      // Invalidate if article or VTT is newer than cache
       const cachePath = vttResolved.replace(/\.vtt$/i, '.align.json');
       if (fs.existsSync(cachePath)) {
         try {
-          const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-          cached.cached = true;
-          jsonReply(res, 200, { ok: true, ...cached });
-          return;
-        } catch (e) { /* cache corrupted, regenerate */ }
+          const cacheMtime = fs.statSync(cachePath).mtimeMs;
+          const articleMtime = fs.statSync(articleResolved).mtimeMs;
+          const vttMtime = fs.statSync(vttResolved).mtimeMs;
+          if (cacheMtime > articleMtime && cacheMtime > vttMtime) {
+            const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+            cached.cached = true;
+            jsonReply(res, 200, { ok: true, ...cached });
+            return;
+          }
+          console.log('[align] cache stale, regenerating:', cachePath);
+        } catch (e) { /* cache corrupted or stat failed, regenerate */ }
       }
       // Run align.py
       const alignScript = path.join(DIR, 'align.py');
