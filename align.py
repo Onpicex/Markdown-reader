@@ -139,6 +139,22 @@ def parse_vtt(vtt_text):
                 text = ' '.join(l.strip() for l in lines[i+1:] if l.strip())
                 if text:
                     cues.append({'start': start, 'end': end, 'text': text})
+    # Drop ASR hallucination cues, but ONLY at file boundaries.
+    # mlx-whisper emits long low-rate cues over intro music / outro silence.
+    # In the middle of a file, a low-rate long cue is usually a source-VTT
+    # placeholder/summary (e.g. platform official transcripts may use one line
+    # like "对话" to summarize a multi-line dialogue) — dropping it leaves a
+    # gap and confuses the aligner.
+    def _is_hallucination(c):
+        dur = c['end'] - c['start']
+        if dur <= 8:
+            return False
+        rate = len(norm_text(c['text'])) / max(dur, 0.1)
+        return rate < 1.0
+    while len(cues) > 1 and _is_hallucination(cues[0]):
+        cues.pop(0)
+    while len(cues) > 1 and _is_hallucination(cues[-1]):
+        cues.pop()
     # Strip trailing hallucinated/repeated cues
     if len(cues) > 10:
         tail_start = max(0, len(cues) - 30)
@@ -388,19 +404,27 @@ def align(segments, cues, model):
         
         for cue_idx in run_cues:
             cue_text = cues[cue_idx]['text']
-            
+
             best_ri = -1
-            best_score = -1
-            
+            best_score = -1.0
+
             for ri in range(last_assigned, len(run_segs)):
                 si = run_segs[ri]
-                cs = char_similarity(cue_text, segments[si])
+                target = segments[si]
+                # For very short dialogue lines (e.g. "是的"), char_similarity
+                # falsely scores ~1.0 because their characters appear in almost
+                # any Chinese cue text. Require strict substring match instead.
+                nt = norm_text(target)
+                if 0 < len(nt) <= 5:
+                    cs = 1.0 if nt in norm_text(cue_text) else 0.0
+                else:
+                    cs = char_similarity(cue_text, target)
                 if ri == last_assigned:
                     cs += 0.03  # locality
                 if cs > best_score:
                     best_score = cs
                     best_ri = ri
-            
+
             if best_score >= 0.25 and best_ri >= last_assigned:
                 last_assigned = best_ri
                 cue_to_seg[cue_idx] = run_segs[best_ri]
@@ -482,7 +506,50 @@ def align(segments, cues, model):
     for ci, seg_idx in enumerate(chunk_assignments):
         for cue_idx in chunk_indices[ci]:
             seg_map[cue_idx] = seg_idx
-    
+
+    # --- Per-cue snap-to-heading pass ---
+    # When a single cue's text closely matches a *short* segment (e.g. a heading
+    # like "第二是自我成长的超越性") that the chunk-level assignment swallowed
+    # into a neighbor, snap that one cue to the heading. Maintains monotonicity.
+    SNAP_MIN_SIM = 0.55       # min similarity to consider snapping
+    SNAP_GAIN = 0.15          # required improvement over current sim
+    SNAP_LOOKAHEAD = 4        # how many segs forward to consider
+    MAX_HEADING_LEN = 30      # only snap to short segs (treat as heading-like)
+    SHORT_TARGET_LEN = 5      # below this, require strict substring match
+                              # (char_similarity falsely scores ~1.0 for 2-3
+                              # char targets like "是的"/"嗯" because their
+                              # characters appear in almost any Chinese text)
+
+    def _snap_sim(cue_text, target):
+        nt = norm_text(target)
+        nc = norm_text(cue_text)
+        if not nt:
+            return 0.0
+        if len(nt) <= SHORT_TARGET_LEN:
+            return 1.0 if nt in nc else 0.0
+        return char_similarity(cue_text, target)
+
+    last_assigned = 0
+    for ci in range(len(cues)):
+        cur_seg = seg_map[ci]
+        if cur_seg < last_assigned:
+            cur_seg = last_assigned
+            seg_map[ci] = cur_seg
+        cue_text = cues[ci]['text']
+        cur_sim = _snap_sim(cue_text, segments[cur_seg]) if cur_seg < n else 0.0
+        best_si = cur_seg
+        best_sim = cur_sim
+        for si in range(cur_seg + 1, min(n, cur_seg + 1 + SNAP_LOOKAHEAD)):
+            if len(segments[si]) > MAX_HEADING_LEN:
+                continue
+            sim = _snap_sim(cue_text, segments[si])
+            if sim >= SNAP_MIN_SIM and sim >= cur_sim + SNAP_GAIN and sim > best_sim:
+                best_si = si
+                best_sim = sim
+        if best_si != cur_seg:
+            seg_map[ci] = best_si
+        last_assigned = seg_map[ci]
+
     # Derive segTimeRanges
     seg_first = [None] * n
     seg_last = [None] * n
@@ -693,9 +760,12 @@ def main():
     seg_map, seg_time_ranges = align(segments, cues, model)
     t3 = time.time()
     
-    # Stats
+    # Stats. Bump 'version' whenever align.py logic changes in a way that
+    # invalidates existing caches; server-side self-heal compares to its own
+    # ALIGN_VERSION and regenerates on mismatch.
     segs_hit = len(set(seg_map))
     stats = {
+        'version': 5,
         'segments': len(segments),
         'cues': len(cues),
         'segsHit': segs_hit,
