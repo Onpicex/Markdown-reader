@@ -45,6 +45,66 @@ const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 const _transcribeInProgress = new Set();
 const validTokens = new Set();
 
+// ── Vault basename index (Obsidian-style short-link resolution) ──
+// Maps lowercase basename → vault-relative path. Built lazily, invalidated by watcher.
+let _basenameIndex = null;
+let _basenameIndexBuilt = 0;
+const _BASENAME_MIN_REBUILD_MS = 3000;
+const _BASENAME_MAX_AGE_MS = 60000;
+
+function buildBasenameIndex() {
+  const idx = new Map();
+  if (!config.vault) { _basenameIndex = idx; _basenameIndexBuilt = Date.now(); return; }
+  const root = config.vault;
+  const walk = (dir) => {
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const ent of ents) {
+      if (ent.name.startsWith('.')) continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(full);
+      else if (ent.isFile()) {
+        const key = ent.name.toLowerCase();
+        if (!idx.has(key)) idx.set(key, path.relative(root, full));
+      }
+    }
+  };
+  walk(root);
+  _basenameIndex = idx;
+  _basenameIndexBuilt = Date.now();
+}
+
+function invalidateBasenameIndex() { _basenameIndex = null; }
+
+// Resolve vault-relative path with Obsidian-style basename fallback.
+// Returns absolute path (within vault) if found, else null.
+function resolveVaultPath(rel) {
+  if (!rel || !config.vault) return null;
+  const vaultAbs = path.resolve(config.vault);
+  const direct = path.resolve(config.vault, rel);
+  if (!direct.startsWith(vaultAbs)) return null;
+  if (fs.existsSync(direct)) return direct;
+  // Fallback: only for bare filenames (no '/'), look up by basename
+  if (rel.includes('/')) return null;
+  const key = rel.toLowerCase();
+  const tryLookup = () => {
+    const hit = _basenameIndex && _basenameIndex.get(key);
+    return hit ? path.resolve(config.vault, hit) : null;
+  };
+  if (!_basenameIndex || Date.now() - _basenameIndexBuilt > _BASENAME_MAX_AGE_MS) {
+    buildBasenameIndex();
+  }
+  let found = tryLookup();
+  if (found) return found;
+  // Second chance: rebuild if cache is older than min-rebuild and retry once
+  // (handles the case where a VTT/file was just created)
+  if (Date.now() - _basenameIndexBuilt > _BASENAME_MIN_REBUILD_MS) {
+    buildBasenameIndex();
+    found = tryLookup();
+  }
+  return found;
+}
+
 function makeToken() {
   const t = crypto.randomBytes(24).toString('hex');
   validTokens.add(t);
@@ -655,19 +715,14 @@ const server = http.createServer(async (req, res) => {
         jsonReply(res, 500, { ok: false, error: 'Vault not configured' });
         return;
       }
-      const resolved = path.resolve(config.vault, audioPath);
-      if (!resolved.startsWith(path.resolve(config.vault))) {
-        jsonReply(res, 403, { ok: false, error: 'Forbidden' });
-        return;
-      }
-      // Check audio file exists
-      if (!fs.existsSync(resolved)) {
+      const resolved = resolveVaultPath(audioPath);
+      if (!resolved) {
         jsonReply(res, 404, { ok: false, error: 'Audio file not found' });
         return;
       }
       // VTT output path: same dir, same name, .vtt extension
       const vttPath = resolved.replace(/\.[^.]+$/, '.vtt');
-      const vttRelative = audioPath.replace(/\.[^.]+$/, '.vtt');
+      const vttRelative = path.relative(config.vault, vttPath);
       // If VTT already exists, return immediately
       if (fs.existsSync(vttPath)) {
         jsonReply(res, 200, { ok: true, vttPath: vttRelative, cached: true });
@@ -720,22 +775,17 @@ const server = http.createServer(async (req, res) => {
         jsonReply(res, 400, { ok: false, error: 'Missing audioPath' });
         return;
       }
-      const resolved = path.resolve(config.vault, audioPath);
-      const vttPath = resolved.replace(/\.[^.]+$/, '.vtt');
-      const vttRelative = audioPath.replace(/\.[^.]+$/, '.vtt');
-      if (fs.existsSync(vttPath)) {
+      const resolved = resolveVaultPath(audioPath);
+      // Try to find VTT (may exist even when audio doesn't, after rename); fall back to deriving from audio
+      const vttResolved = resolveVaultPath(audioPath.replace(/\.[^.]+$/, '.vtt'))
+        || (resolved ? resolved.replace(/\.[^.]+$/, '.vtt') : null);
+      const vttRelative = vttResolved ? path.relative(config.vault, vttResolved) : null;
+      if (vttResolved && fs.existsSync(vttResolved)) {
         jsonReply(res, 200, { ok: true, status: 'done', vttPath: vttRelative });
-      } else if (_transcribeInProgress.has(resolved)) {
+      } else if (resolved && _transcribeInProgress.has(resolved)) {
         jsonReply(res, 200, { ok: true, status: 'in_progress' });
       } else {
-        // Transcription not in Set - but VTT may have been generated
-        // (race: _transcribeInProgress.delete fires before next poll)
-        // Re-check VTT on disk before declaring not_started
-        if (fs.existsSync(vttPath)) {
-          jsonReply(res, 200, { ok: true, status: 'done', vttPath: vttRelative });
-        } else {
-          jsonReply(res, 200, { ok: true, status: 'not_started' });
-        }
+        jsonReply(res, 200, { ok: true, status: 'not_started' });
       }
     } catch (e) {
       jsonReply(res, 500, { ok: false, error: e.message });
@@ -755,13 +805,12 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const articleResolved = path.resolve(config.vault, articleId);
-      const vttResolved = path.resolve(config.vault, vttPath);
-      if (!articleResolved.startsWith(path.resolve(config.vault)) ||
-          !vttResolved.startsWith(path.resolve(config.vault))) {
+      const vttResolved = resolveVaultPath(vttPath);
+      if (!articleResolved.startsWith(path.resolve(config.vault))) {
         jsonReply(res, 403, { ok: false, error: 'Forbidden' });
         return;
       }
-      if (!fs.existsSync(articleResolved) || !fs.existsSync(vttResolved)) {
+      if (!fs.existsSync(articleResolved) || !vttResolved) {
         jsonReply(res, 404, { ok: false, error: 'File not found' });
         return;
       }
@@ -841,21 +890,21 @@ const server = http.createServer(async (req, res) => {
   // /vault/* → GET: serve from vault; POST: write markdown back
   if (pathname.startsWith('/vault/')) {
     const rel = pathname.slice(7);
-    const resolved = path.resolve(config.vault, rel);
-    if (!resolved.startsWith(path.resolve(config.vault))) {
+    const directResolved = path.resolve(config.vault, rel);
+    if (!directResolved.startsWith(path.resolve(config.vault))) {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
 
-    // POST /vault/* - write markdown content
+    // POST /vault/* - write markdown content (no basename fallback for writes)
     if (req.method === 'POST') {
       // Only allow writing .md files
-      if (!resolved.toLowerCase().endsWith('.md')) {
+      if (!directResolved.toLowerCase().endsWith('.md')) {
         jsonReply(res, 400, { ok: false, error: 'Only .md files can be edited' });
         return;
       }
       // Ensure file exists (don't create new files via this endpoint)
-      if (!fs.existsSync(resolved)) {
+      if (!fs.existsSync(directResolved)) {
         jsonReply(res, 404, { ok: false, error: 'File not found' });
         return;
       }
@@ -866,7 +915,7 @@ const server = http.createServer(async (req, res) => {
           jsonReply(res, 400, { ok: false, error: 'Missing content field' });
           return;
         }
-        fs.writeFileSync(resolved, content, 'utf-8');
+        fs.writeFileSync(directResolved, content, 'utf-8');
         // Trigger rescan so catalog stays in sync
         scheduleRescan('edit: ' + rel);
         jsonReply(res, 200, { ok: true });
@@ -876,6 +925,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // GET: try direct path, then Obsidian-style basename fallback
+    const resolved = fs.existsSync(directResolved) ? directResolved : resolveVaultPath(rel);
+    if (!resolved) {
+      res.writeHead(404); res.end('Not found');
+      return;
+    }
     // Use Range-aware streaming for audio/video (enables seeking)
     if (MEDIA_EXTS.has(path.extname(resolved).toLowerCase())) {
       serveFileWithRange(req, res, resolved, 'no-store, no-cache, must-revalidate');
@@ -1019,7 +1074,9 @@ function startWatching(vaultPath) {
   try {
     _watcher = fs.watch(vaultPath, { recursive: true }, (eventType, filename) => {
       if (!filename) return;
-      // Only care about .md file changes and directory renames
+      // Any file or directory change invalidates the basename index
+      invalidateBasenameIndex();
+      // Only .md changes and directory renames trigger a catalog rescan
       const ext = path.extname(filename).toLowerCase();
       const isDir = !ext; // directory events often have no extension
       if (ext === '.md' || isDir) {
