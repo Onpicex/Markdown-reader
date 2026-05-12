@@ -13,66 +13,117 @@ def norm_text(t):
     t = re.sub(r'[^\u4e00-\u9fff\u3400-\u4dbfa-zA-Z0-9]', '', t)
     return t.lower()
 
+def _strip_md_emphasis(s):
+    """Strip markdown emphasis/links so text matches the rendered DOM textContent.
+    Order matters: strong first (** **) before emphasis (* *)."""
+    s = re.sub(r'\*\*(.+?)\*\*', r'\1', s)
+    s = re.sub(r'__(.+?)__', r'\1', s)
+    s = re.sub(r'(?<!\*)\*([^\*\n]+?)\*(?!\*)', r'\1', s)
+    s = re.sub(r'(?<![\w_])_([^_\n]+?)_(?![\w_])', r'\1', s)
+    s = re.sub(r'`([^`]+?)`', r'\1', s)
+    # Inline image ![alt](url) → alt
+    s = re.sub(r'!\[([^\]]*?)\]\([^\)]+?\)', r'\1', s)
+    # Link [text](url) → text
+    s = re.sub(r'\[([^\]]+?)\]\([^\)]+?\)', r'\1', s)
+    # Wikilinks [[X|Y]] → Y, [[X]] → X
+    s = re.sub(r'\[\[([^\]\|]+?)\|([^\]]+?)\]\]', r'\2', s)
+    s = re.sub(r'\[\[([^\]]+?)\]\]', r'\1', s)
+    return s
+
+
 def parse_segments(md_text):
-    """Extract paragraphs matching the browser DOM structure.
-    
-    Must match the frontend's querySelectorAll('p, h1-h6, li, ...') behaviour:
-    - Consecutive non-blank lines (no blank line between) merge into one <p>
-    - Blank lines separate <p> blocks
-    - Headings (# ...) are individual elements
-    - Ordered/unordered list items (1. ... or - ...) are individual <li> elements
-    - ![[...]] audio/image embeds are skipped
-    - Frontmatter (---) is skipped
+    """Extract paragraphs matching the browser DOM after marked.parse().
+
+    Frontend selector: 'p, h1-h6, li, blockquote > p, td, th'; .audio-embed skipped;
+    empty textContent skipped. We must match its segment COUNT exactly or the
+    frontend rejects our alignment and falls back to LCS.
     """
-    # Strip frontmatter
-    md_body = re.sub(r'^---\n.*?\n---\n', '', md_text, flags=re.DOTALL)
-    # Remove ![[...]] lines
-    md_body = re.sub(r'^!\[\[.*?\]\]$', '', md_body, flags=re.MULTILINE)
-    
-    # Split into blocks by blank lines
+    # YAML frontmatter at top: marked treats it as Setext H2 (paragraph + ---
+    # underline) so it appears in the DOM. Convert to a single heading-like
+    # segment to match.
+    fm_match = re.match(r'^---\n(.*?)\n---\n', md_text, flags=re.DOTALL)
+    if fm_match:
+        md_body = '## ' + fm_match.group(1).strip() + '\n\n' + md_text[fm_match.end():]
+    else:
+        md_body = md_text
+    # Remove audio/video embed lines (rendered as <div class="audio-embed">, skipped)
+    md_body = re.sub(
+        r'^\s*!\[\[[^\]]+?\.(mp3|wav|m4a|ogg|mp4|webm)(\|[^\]]*?)?\]\]\s*$',
+        '', md_body, flags=re.MULTILINE | re.IGNORECASE)
+
     blocks = re.split(r'\n\n+', md_body.strip())
-    
+
     segments = []
     for block in blocks:
         block = block.strip()
         if not block:
             continue
-        
-        # Heading block: each heading line is a separate element
+
+        # If the block's first line is a horizontal rule (not a Setext underline,
+        # since no preceding paragraph line in this block), drop it and continue
+        # processing the rest. Handles platform trailing "---\n_抓取时间..._".
+        lines = block.split('\n')
+        if len(lines) > 1 and re.fullmatch(r'-{3,}|\*{3,}|_{3,}', lines[0].strip()):
+            block = '\n'.join(lines[1:]).strip()
+            if not block:
+                continue
+
+        # Horizontal rule (rendered as <hr>, not in selector)
+        if re.fullmatch(r'(-{3,}|\*{3,}|_{3,})', block):
+            continue
+
+        # Standalone image block ![alt](url) → <p><img></p>, textContent="" → skipped
+        if re.fullmatch(r'!\[[^\]]*?\]\([^\)]+?\)', block):
+            continue
+
+        # Heading
         if re.match(r'^#{1,6}\s+', block):
             text = re.sub(r'^#{1,6}\s+', '', block).strip()
-            if len(text) >= 1:
+            text = _strip_md_emphasis(text)
+            if text:
                 segments.append(text)
             continue
-        
-        # Ordered list block: lines starting with digits + dot
+
+        # Blockquote: every line starts with '>'. Marked renders nested paragraphs
+        # (separated by blank '>' lines) as multiple <p> children → multiple segments.
+        block_lines = block.split('\n')
+        if block_lines and all(re.match(r'^>\s*', l) for l in block_lines):
+            inner = '\n'.join(re.sub(r'^>\s?', '', l) for l in block_lines)
+            for sub in re.split(r'\n\s*\n+', inner.strip()):
+                joined = ' '.join(l.strip() for l in sub.split('\n') if l.strip())
+                text = _strip_md_emphasis(joined).strip()
+                if text:
+                    segments.append(text)
+            continue
+
+        # Ordered list
         ol_items = re.findall(r'^\d+\.\s+(.*)', block, re.MULTILINE)
-        if ol_items and len(ol_items) > 0:
-            # Check if this is really a list (most lines match)
-            total_lines = [l.strip() for l in block.split('\n') if l.strip()]
-            if len(ol_items) >= len(total_lines) * 0.5:
+        if ol_items:
+            total = [l.strip() for l in block.split('\n') if l.strip()]
+            if len(ol_items) >= len(total) * 0.5:
                 for item in ol_items:
-                    item = item.strip()
-                    if len(item) >= 1:
-                        segments.append(item)
+                    text = _strip_md_emphasis(item.strip())
+                    if text:
+                        segments.append(text)
                 continue
-        
-        # Unordered list block
+
+        # Unordered list
         ul_items = re.findall(r'^[-*]\s+(.*)', block, re.MULTILINE)
-        if ul_items and len(ul_items) > 0:
-            total_lines = [l.strip() for l in block.split('\n') if l.strip()]
-            if len(ul_items) >= len(total_lines) * 0.5:
+        if ul_items:
+            total = [l.strip() for l in block.split('\n') if l.strip()]
+            if len(ul_items) >= len(total) * 0.5:
                 for item in ul_items:
-                    item = item.strip()
-                    if len(item) >= 1:
-                        segments.append(item)
+                    text = _strip_md_emphasis(item.strip())
+                    if text:
+                        segments.append(text)
                 continue
-        
-        # Regular paragraph: all lines merge into one segment (like <p> with <br>)
+
+        # Regular paragraph
         text = ' '.join(l.strip() for l in block.split('\n') if l.strip())
-        if len(text) >= 1:
+        text = _strip_md_emphasis(text)
+        if text:
             segments.append(text)
-    
+
     return segments
 
 def parse_vtt(vtt_text):
@@ -233,37 +284,59 @@ def align(segments, cues, model):
     # Similarity matrix (chunks x virtual_segments)
     sim_matrix = np.dot(chunk_embs, vseg_embs.T)
     
-    # Greedy monotonic assignment with locality bias
-    last_vseg = 0
-    chunk_vassignments = []  # index into vseg_list
-    
-    for ci in range(len(chunks)):
-        search_start = max(0, last_vseg)
-        search_end = min(vn, last_vseg + 8)
-        
-        best_idx = -1
-        best_score = -1
-        
-        for vi in range(search_start, search_end):
-            score = float(sim_matrix[ci, vi])
-            jump = vi - last_vseg
-            if jump == 0:
-                score += 0.05
-            elif jump == 1:
-                score += 0.02
-            elif jump > 3:
-                score *= 0.92
-            if score > best_score:
-                best_score = score
-                best_idx = vi
-        
-        raw_score = float(sim_matrix[ci, best_idx]) if best_idx >= 0 else 0
-        
-        if raw_score >= 0.25 and best_idx >= last_vseg:
-            last_vseg = best_idx
-            chunk_vassignments.append(best_idx)
-        else:
-            chunk_vassignments.append(last_vseg)
+    # DTW: globally optimal monotonic alignment of chunks → vsegs.
+    # dp[ci][vi] = best cumulative score using chunks 0..ci, chunk ci mapped to vseg vi.
+    # Transitions allowed: vk → vi for vk <= vi.
+    # Penalty: 0 if vk == vi (stay) or vk == vi-1 (advance one); SKIP_PENALTY*(vi-vk-1)
+    # for skipping >= 1 vseg. This prevents local-greedy wedging where one over-eager
+    # forward jump traps all subsequent chunks at a wrong segment.
+    C = len(chunks)
+    SKIP_PENALTY = 0.05
+    START_PENALTY = 0.05  # penalize starting beyond vseg 0
+
+    dp = np.full((C, vn), -np.inf, dtype=np.float64)
+    parent = np.full((C, vn), -1, dtype=np.int32)
+
+    for vi in range(vn):
+        dp[0, vi] = float(sim_matrix[0, vi]) - START_PENALTY * vi
+        parent[0, vi] = vi  # self-pointer; not used in backtrack past ci=0
+
+    for ci in range(1, C):
+        prev = dp[ci - 1]
+        sim_row = sim_matrix[ci]
+        # Running best of (prev[vk] + SKIP*vk) for vk in [0, vi-2], used for skip case.
+        # Adjusted form so skip cost factors out cleanly.
+        running_best = -np.inf
+        running_best_vk = -1
+        for vi in range(vn):
+            # Admit vk = vi - 2 to running_best (skip case starts at vk <= vi-2)
+            if vi - 2 >= 0:
+                adj = prev[vi - 2] + SKIP_PENALTY * (vi - 2)
+                if adj > running_best:
+                    running_best = adj
+                    running_best_vk = vi - 2
+            # Three candidates: stay (vk=vi), advance (vk=vi-1), skip (vk<=vi-2)
+            best_val = prev[vi]
+            best_vk = vi
+            if vi - 1 >= 0 and prev[vi - 1] > best_val:
+                best_val = prev[vi - 1]
+                best_vk = vi - 1
+            if running_best_vk >= 0:
+                skip_val = running_best - SKIP_PENALTY * (vi - 1)
+                if skip_val > best_val:
+                    best_val = skip_val
+                    best_vk = running_best_vk
+            dp[ci, vi] = float(sim_row[vi]) + best_val
+            parent[ci, vi] = best_vk
+
+    chunk_vassignments = [0] * C
+    last_vi = int(np.argmax(dp[C - 1]))
+    chunk_vassignments[C - 1] = last_vi
+    for ci in range(C - 1, 0, -1):
+        last_vi = int(parent[ci, last_vi])
+        if last_vi < 0:
+            last_vi = 0
+        chunk_vassignments[ci - 1] = last_vi
     
     # --- Expand virtual assignments back to original segment indices ---
     # For non-dialogue vsegs: direct mapping

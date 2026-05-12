@@ -824,11 +824,21 @@ const server = http.createServer(async (req, res) => {
           const vttMtime = fs.statSync(vttResolved).mtimeMs;
           if (cacheMtime > articleMtime && cacheMtime > vttMtime) {
             const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-            cached.cached = true;
-            jsonReply(res, 200, { ok: true, ...cached });
-            return;
+            // Self-healing: if alignment quality is low (<50% of segments hit by
+            // any cue), discard and regenerate. Catches caches written by older
+            // parser/aligner versions.
+            const st = cached.stats || {};
+            const hitRatio = st.segments > 0 ? (st.segsHit || 0) / st.segments : 1;
+            if (hitRatio < 0.5) {
+              console.log(`[align] cache low-quality (segsHit=${st.segsHit}/${st.segments}), regenerating: ${cachePath}`);
+            } else {
+              cached.cached = true;
+              jsonReply(res, 200, { ok: true, ...cached });
+              return;
+            }
+          } else {
+            console.log('[align] cache stale, regenerating:', cachePath);
           }
-          console.log('[align] cache stale, regenerating:', cachePath);
         } catch (e) { /* cache corrupted or stat failed, regenerate */ }
       }
       // Run align.py

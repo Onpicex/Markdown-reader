@@ -2792,6 +2792,8 @@ const InlineAudio={
           seen.add(el);
           // Skip elements inside .audio-embed (UI, not article content)
           if(el.closest('.audio-embed'))continue;
+          // Skip <p> directly inside <li> — loose-list rendering duplicates content
+          if(el.tagName==='P'&&el.parentElement&&el.parentElement.tagName==='LI')continue;
           const text=el.innerText.trim();
           if(text.length<1)continue;
           segments.push({el,text});
@@ -2838,9 +2840,7 @@ const InlineAudio={
           else hi=mid-1;
         }
         if(hi>=0){
-          if(segTimeRanges[hi]&&t<segTimeRanges[hi].end){sIdx=hi;}
-          else if(hi+1<segTimeRanges.length){sIdx=hi+1;}
-          else{sIdx=hi;}
+          sIdx=hi;
         }else if(segTimeRanges.length>0){
           sIdx=0;
         }
