@@ -12,6 +12,7 @@ Markdown 知识库阅读器,直接映射 Obsidian Vault 的目录结构和内容
 - 🔒 **访问密码** - Cookie 认证保持一年,可通过网页修改密码
 - 🎨 **三主题切换** - 浅色/暗色/护眼三种阅读主题
 - 📱 **响应式设计** - 三断点适配(桌面 / 平板 / 手机)
+- 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `http://your-host.example:8765`,Web 版保持不变
 - 🎨 **书摘分享** - 选中文字生成精美书摘卡片,4 种风格可选,支持保存 PNG
 - 🎧 **TTS 听书** - Edge TTS 高品质语音朗读,实时段落高亮跟读,支持倍速调节,点击高亮段落可暂停/继续
 - 🎵 **MP3 字幕跟读** - 内嵌 MP3 音频逐段高亮跟读,智能模糊匹配算法对齐转录与原文,自动检测并跳过音频开头介绍
@@ -172,6 +173,14 @@ cp config.example.json config.json
 | `password` | 访问密码(留空 `""` 关闭密码功能) |
 | `ttsEnabled` | TTS 听书功能开关(默认 `true`,设为 `false` 隐藏所有 TTS 相关按钮) |
 
+### 当前部署约定
+
+- 本地项目目录:`/Users/lhx/.openclaw/workspace/obsidian-reader`
+- macOS LaunchAgent:`~/Library/LaunchAgents/com.obsidian-reader.plist`
+- 服务端口:`8765`
+- 公网/移动端默认访问地址:`http://your-host.example:8765`
+- Android 客户端策略:使用独立原生 Android WebView wrapper 加载上面的服务 URL,不改动现有 Web 前端/后端。因为当前是 HTTP 地址,Android 端需要为 `your-host.example` 配置 cleartext traffic。
+
 ### 启动
 
 ```bash
@@ -220,6 +229,35 @@ launchctl kickstart -k gui/$(id -u)/com.obsidian-reader
 # 停止
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 ```
+
+## Android 客户端
+
+知识库阅读器的 Android 端推荐做成**独立原生 WebView 壳**:
+
+```text
+Android App
+  └── WebView
+        └── http://your-host.example:8765
+              └── 现有 Markdown Reader Web 服务
+```
+
+设计原则:
+
+- Web 版保持不变:继续由 `server.js` + `dist/index.html` 提供浏览器端体验。
+- Android 端只负责 WebView 容器能力:网络权限、Cookie、DOM Storage、下载、返回键、错误页、进度条。
+- 默认服务 URL:`http://your-host.example:8765`。
+- 因为默认 URL 是 HTTP,Android Manifest 需要 `android:usesCleartextTraffic="true"`,并建议在 `network_security_config.xml` 中只对白名单域名 `your-host.example` 放行明文流量。
+- 后续如切到 HTTPS,应移除 cleartext 配置。
+
+最小 WebView 配置要点:
+
+- `INTERNET` / `ACCESS_NETWORK_STATE` 权限
+- `setJavaScriptEnabled(true)`
+- `setDomStorageEnabled(true)`
+- `CookieManager.setAcceptCookie(true)`
+- 同源链接留在 WebView,外部链接交给系统浏览器
+- Android 返回键优先 `webView.goBack()`
+- `DownloadListener` 转交系统 DownloadManager,并携带 Cookie header
 
 ## TTS 听书
 
@@ -318,6 +356,14 @@ Markdown-reader/
     ├── index.html       - SPA 前端
     └── data/
         └── catalog.json - 文章目录(自动生成,.gitignore 忽略)
+```
+
+Android wrapper 建议放在独立同级目录,例如:
+
+```
+workspace/
+├── obsidian-reader/          - Web 服务,本仓库
+└── obsidian-reader-android/  - 原生 Android WebView 壳,加载 http://your-host.example:8765
 ```
 
 ## License
