@@ -171,7 +171,7 @@ cp config.example.json config.json
 | `port` | 服务端口(默认 8765) |
 | `bind` | 绑定地址(`0.0.0.0` 允许局域网访问,`127.0.0.1` 仅本机) |
 | `password` | 访问密码(留空 `""` 关闭密码功能) |
-| `ttsEnabled` | TTS 听书功能开关(默认 `true`,设为 `false` 隐藏所有 TTS 相关按钮) |
+| `ttsEnabled` | TTS 听书功能开关(默认 `false`,设为 `true` 显示所有 TTS 相关按钮) |
 
 ### 当前部署约定
 

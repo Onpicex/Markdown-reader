@@ -1295,7 +1295,7 @@ function applyTtsSetting(enabled){
   try{
     const r=await fetch('/api/config');
     const d=await r.json();
-    applyTtsSetting(d.ttsEnabled!==false);
+    applyTtsSetting(d.ttsEnabled===true);
   }catch(e){}
 })();
 // Immediately save TTS toggle on change (no need to click "保存并重新扫描")
@@ -1305,7 +1305,7 @@ cfgTts.addEventListener('change',async function(){
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ttsEnabled:enabled})});
     const d=await r.json();
     if(d.ok){
-      applyTtsSetting(d.ttsEnabled!==false);
+      applyTtsSetting(d.ttsEnabled===true);
     }else{
       cfgTts.checked=!enabled; // revert on failure
     }
@@ -1335,7 +1335,7 @@ settings.addEventListener('click',async function(){
     const r=await fetch('/api/config');
     const d=await r.json();
     cfgVault.value=d.vault||'';
-    cfgTts.checked=d.ttsEnabled!==false;
+    cfgTts.checked=d.ttsEnabled===true;
   }catch(e){}
   // Sync debug toggle with current state
   const debugOn=(typeof InlineAudio!=='undefined'&&InlineAudio.debug)||(typeof TTS!=='undefined'&&TTS.debug);
@@ -1354,7 +1354,7 @@ cfgSave.addEventListener('click',async function(){
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vault,ttsEnabled})});
     const d=await r.json();
     if(d.ok){
-      applyTtsSetting(d.ttsEnabled!==false);
+      applyTtsSetting(d.ttsEnabled===true);
       modalBg.classList.remove('on');
       rescan.click();
     }else{

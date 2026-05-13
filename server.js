@@ -828,7 +828,7 @@ const server = http.createServer(async (req, res) => {
             //  (1) version mismatch (align.py logic changed) → regenerate
             //  (2) low quality (<50% of segments hit by any cue) → regenerate
             const st = cached.stats || {};
-            const ALIGN_VERSION = 5;
+            const ALIGN_VERSION = 8;
             const cachedVer = st.version || 0;
             const hitRatio = st.segments > 0 ? (st.segsHit || 0) / st.segments : 1;
             if (cachedVer !== ALIGN_VERSION) {
@@ -1002,7 +1002,7 @@ const server = http.createServer(async (req, res) => {
   // /api/config - GET current config, POST update vault path
   if (pathname === '/api/config') {
     if (req.method === 'GET') {
-      jsonReply(res, 200, { vault: config.vault, ttsEnabled: config.ttsEnabled !== false });
+      jsonReply(res, 200, { vault: config.vault, ttsEnabled: config.ttsEnabled === true });
       return;
     }
     if (req.method === 'POST') {
@@ -1020,7 +1020,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (changed) {
           saveConfig(config);
-          jsonReply(res, 200, { ok: true, vault: config.vault, ttsEnabled: config.ttsEnabled !== false });
+          jsonReply(res, 200, { ok: true, vault: config.vault, ttsEnabled: config.ttsEnabled === true });
         } else {
           jsonReply(res, 400, { ok: false, error: 'No valid fields provided' });
         }

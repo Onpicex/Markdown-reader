@@ -38,12 +38,13 @@ def parse_segments(md_text):
     empty textContent skipped. We must match its segment COUNT exactly or the
     frontend rejects our alignment and falls back to LCS.
     """
-    # YAML frontmatter at top: marked treats it as Setext H2 (paragraph + ---
-    # underline) so it appears in the DOM. Convert to a single heading-like
-    # segment to match.
-    fm_match = re.match(r'^---\n(.*?)\n---\n', md_text, flags=re.DOTALL)
-    if fm_match:
-        md_body = '## ' + fm_match.group(1).strip() + '\n\n' + md_text[fm_match.end():]
+    # YAML frontmatter: front-end `stripFrontmatter` removes it entirely before
+    # marked.parse, so it does NOT appear as a DOM segment. Match that here.
+    # Logic mirrors dist/index.html stripFrontmatter(): requires leading '---'
+    # and a subsequent '\n---\s*\n' delimiter.
+    if md_text.startswith('---'):
+        m = re.search(r'\n---\s*\n', md_text[3:])
+        md_body = md_text[3 + m.end():] if m else md_text
     else:
         md_body = md_text
     # Remove audio/video embed lines (rendered as <div class="audio-embed">, skipped)
@@ -529,6 +530,34 @@ def align(segments, cues, model):
             return 1.0 if nt in nc else 0.0
         return char_similarity(cue_text, target)
 
+    def _boundary_sim(cue_text, target):
+        # Same short-target substring rule as _snap_sim to avoid
+        # char_similarity false positives on 2-3 char dialogue segments.
+        nt = norm_text(target)
+        if not nt:
+            return 0.0
+        if len(nt) <= SHORT_TARGET_LEN:
+            return 1.0 if nt in norm_text(cue_text) else 0.0
+        return char_similarity(cue_text, target)
+
+    def _is_duplicate_seg(i):
+        # True if segments[i]'s leading text appears as substring in an
+        # EARLIER segment. Detects OCR-pasted summaries (划重点 列表 repeating
+        # opening paragraphs) and accidental duplicates from rebuilt PDFs.
+        # Earlier-only avoids flagging the original (seg 3 real content; seg
+        # 46 that pastes seg 3 is the duplicate). Such segments have no audio
+        # time and must not borrow/redistribute time from mapped neighbors.
+        nt = norm_text(segments[i])
+        if len(nt) < 10:
+            return False
+        head_len = max(15, len(nt) // 2)
+        head = nt[:head_len]
+        for j in range(i):
+            on = norm_text(segments[j])
+            if head in on:
+                return True
+        return False
+
     last_assigned = 0
     for ci in range(len(cues)):
         cur_seg = seg_map[ci]
@@ -549,6 +578,55 @@ def align(segments, cues, model):
         if best_si != cur_seg:
             seg_map[ci] = best_si
         last_assigned = seg_map[ci]
+
+    # --- Per-cue boundary refinement pass ---
+    # At each transition (seg_map[ci]=A, seg_map[ci+1]=B with A+1==B), examine
+    # the cues in a window around ci and pick the split point that maximizes
+    # total per-cue similarity. Fixes systematic delay/early-jump caused by
+    # chunk-level boundaries: a chunk crossing a paragraph break gets assigned
+    # whole to one side, putting some cues on the wrong segment and pushing
+    # segTimeRanges[B].start to a cue that actually belongs to A (or vice
+    # versa). Maintains monotonicity since we only swap labels within [A, B].
+    BOUNDARY_WIN = 4  # cues on each side of transition
+
+    ci_iter = 0
+    while ci_iter < len(seg_map) - 1:
+        if seg_map[ci_iter] == seg_map[ci_iter + 1]:
+            ci_iter += 1
+            continue
+        A = seg_map[ci_iter]
+        B = seg_map[ci_iter + 1]
+        # Only adjacent segments (skip gaps — those are handled by interpolation)
+        if A + 1 != B or A < 0 or B >= n:
+            ci_iter += 1
+            continue
+        lo = ci_iter
+        while lo > 0 and seg_map[lo - 1] == A and (ci_iter - lo + 1) < BOUNDARY_WIN:
+            lo -= 1
+        hi = ci_iter + 1
+        while hi < len(seg_map) - 1 and seg_map[hi + 1] == B and (hi - ci_iter) < BOUNDARY_WIN:
+            hi += 1
+        simA = [_boundary_sim(cues[j]['text'], segments[A]) for j in range(lo, hi + 1)]
+        simB = [_boundary_sim(cues[j]['text'], segments[B]) for j in range(lo, hi + 1)]
+        # Best split k: cues [lo..k) → A, [k..hi+1) → B
+        prefixA = [0.0] * (hi - lo + 2)
+        suffixB = [0.0] * (hi - lo + 2)
+        for j in range(hi - lo + 1):
+            prefixA[j + 1] = prefixA[j] + simA[j]
+        for j in range(hi - lo, -1, -1):
+            suffixB[j] = suffixB[j + 1] + simB[j]
+        best_score = -1.0
+        best_k = ci_iter + 1
+        for k in range(lo, hi + 2):
+            score = prefixA[k - lo] + suffixB[k - lo]
+            if score > best_score:
+                best_score = score
+                best_k = k
+        for j in range(lo, best_k):
+            seg_map[j] = A
+        for j in range(best_k, hi + 1):
+            seg_map[j] = B
+        ci_iter = hi + 1
 
     # Derive segTimeRanges
     seg_first = [None] * n
@@ -571,6 +649,11 @@ def align(segments, cues, model):
     
     # Fill gaps by interpolation — text-length proportional distribution
     audio_end = cues[-1]['end']
+
+    # Precompute duplicate-seg flags: used to prevent borrow/redistribute from
+    # giving non-spoken pasted content (OCR-duplicated 划重点 lists, accidental
+    # paragraph repeats) audio time stolen from real mapped neighbors.
+    dup_seg = [_is_duplicate_seg(i) for i in range(n)]
     
     # Identify contiguous runs of None entries and fill them proportionally
     i = 0
@@ -606,7 +689,10 @@ def align(segments, cues, model):
             # If the gap is very small (<2s per segment), borrow time from neighbors
             run_len = run_end_idx - run_start_idx + 1
             needed_time = run_len * 1.5  # ~1.5s per segment minimum
-            if gap_time < needed_time:
+            # Don't borrow time for duplicate segs (OCR-pasted content with no
+            # real audio) — keep the mapped neighbor's range intact.
+            any_dup_in_run = any(dup_seg[j] for j in range(run_start_idx, run_end_idx + 1))
+            if gap_time < needed_time and not any_dup_in_run:
                 borrow_total = needed_time - gap_time
                 # Borrow from prev (up to 40% of its duration)
                 if prev_idx is not None:
@@ -665,7 +751,16 @@ def align(segments, cues, model):
             while run_end < n and seg_first[run_end] is None:
                 run_end += 1
             run_end -= 1  # inclusive
-            
+
+            # Skip trailing unmapped runs (划重点 / source-PDF links not in
+            # audio) — stealing time from the last mapped seg causes the
+            # highlight to fly past actual spoken content (e.g., 下一讲预告).
+            if run_end >= n - 1:
+                continue
+            # Skip internal runs containing any duplicate seg (OCR paste).
+            if any(dup_seg[j] for j in range(i + 1, run_end + 1)):
+                continue
+
             unmapped_len = sum(max(len(segments[j]), 1) for j in range(i + 1, run_end + 1))
             unmapped_dur = sum(seg_time_ranges[j]['end'] - seg_time_ranges[j]['start'] 
                               for j in range(i + 1, run_end + 1))
@@ -765,7 +860,7 @@ def main():
     # ALIGN_VERSION and regenerates on mismatch.
     segs_hit = len(set(seg_map))
     stats = {
-        'version': 5,
+        'version': 8,
         'segments': len(segments),
         'cues': len(cues),
         'segsHit': segs_hit,
