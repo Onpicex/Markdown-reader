@@ -156,6 +156,61 @@ def parse_vtt(vtt_text):
         cues.pop(0)
     while len(cues) > 1 and _is_hallucination(cues[-1]):
         cues.pop()
+    # Trim within-cue repetition-loop hallucinations (mlx-whisper-turbo's
+    # signature failure mode). Example real case: a 30s cue whose tail is
+    # "一百一百一百…" × 78. Without trimming, align.py expands the
+    # corresponding article segment's time range to swallow the inflated
+    # duration, freezing the highlight for the whole cue. Detection: any cue
+    # ≥5s whose dominant 1- to 3-gram suffix repeats ≥5 times in a row.
+    # On detection: strip the repeating tail from text and shrink end time
+    # proportionally to the surviving character count (Whisper's timestamp
+    # was inflated by the spurious repetition).
+    for c in cues:
+        dur = c['end'] - c['start']
+        if dur < 5:
+            continue
+        norm = norm_text(c['text'])
+        if len(norm) < 20:
+            continue
+        # Find longest periodic suffix among 1- to 3-gram periods.
+        # Prefer larger ngrams when tied so "一百一百…" is detected as
+        # period-2, not period-1 ("百百百…").
+        best_cut = None  # char position in `norm` at which to cut
+        best_repeats = 0
+        for n in (3, 2, 1):
+            if len(norm) < n * 5:
+                continue
+            suffix = norm[-n:]
+            repeats = 1
+            i = len(norm) - 2 * n
+            while i >= 0 and norm[i:i + n] == suffix:
+                repeats += 1
+                i -= n
+            if repeats >= 5 and repeats > best_repeats:
+                best_repeats = repeats
+                # Keep one occurrence of the ngram; drop the rest.
+                best_cut = i + n + n  # = (last non-repeating end) + 1 ngram
+        if best_cut is None or best_cut >= len(norm):
+            continue
+        retain_ratio = best_cut / len(norm)
+        if retain_ratio >= 0.9:
+            continue  # tail is small; not worth trimming
+        # Cut the original (un-normalized) text proportionally. We walk
+        # the original until we've seen `best_cut` normalized chars, so
+        # punctuation/whitespace in the original stays attached to the
+        # surviving prefix.
+        kept = 0
+        cut_at_orig = len(c['text'])
+        for oi, ch in enumerate(c['text']):
+            if norm_text(ch):
+                kept += 1
+            if kept >= best_cut:
+                cut_at_orig = oi + 1
+                break
+        c['text'] = c['text'][:cut_at_orig]
+        # Shrink duration proportionally: Whisper's end timestamp was
+        # inflated by the repetition spew, but its start is trustworthy.
+        c['end'] = c['start'] + dur * retain_ratio
     # Strip trailing hallucinated/repeated cues
     if len(cues) > 10:
         tail_start = max(0, len(cues) - 30)
@@ -857,7 +912,7 @@ def main():
     # ALIGN_VERSION and regenerates on mismatch.
     segs_hit = len(set(seg_map))
     stats = {
-        'version': 8,
+        'version': 9,
         'segments': len(segments),
         'cues': len(cues),
         'segsHit': segs_hit,

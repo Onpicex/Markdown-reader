@@ -828,6 +828,7 @@ const server = http.createServer(async (req, res) => {
         '--model', 'mlx-community/whisper-large-v3-turbo',
         '--language', 'zh',
         '--output-format', 'vtt',
+        '--condition-on-previous-text', 'False',
         '--output-dir', outputDir,
         resolved
       ], { timeout: 600000 });
@@ -916,13 +917,28 @@ const server = http.createServer(async (req, res) => {
             //  (1) version mismatch (align.py logic changed) → regenerate
             //  (2) low quality (<50% of segments hit by any cue) → regenerate
             const st = cached.stats || {};
-            const ALIGN_VERSION = 8;
+            const ALIGN_VERSION = 9;
             const cachedVer = st.version || 0;
-            const hitRatio = st.segments > 0 ? (st.segsHit || 0) / st.segments : 1;
+            // Bonus credit for segments that don't appear in audio (footnotes,
+            // 划重点 summary lists) — they correctly stay unmapped. Without
+            // this, articles with many footnotes look "low quality" and
+            // regenerate forever. Heuristic: unmapped tail (>15% of segments
+            // at audio_end) is treated as expected-non-spoken.
+            const tr = cached.segTimeRanges || [];
+            let tailUnmapped = 0;
+            if (tr.length) {
+              const audioEnd = tr[tr.length - 1].end;
+              for (let i = tr.length - 1; i >= 0; i--) {
+                if (Math.abs(tr[i].start - audioEnd) < 0.01 && Math.abs(tr[i].end - audioEnd) < 0.01) tailUnmapped++;
+                else break;
+              }
+            }
+            const effSegments = Math.max(1, st.segments - tailUnmapped);
+            const hitRatio = (st.segsHit || 0) / effSegments;
             if (cachedVer !== ALIGN_VERSION) {
               console.log(`[align] cache version=${cachedVer} (current=${ALIGN_VERSION}), regenerating: ${cachePath}`);
-            } else if (hitRatio < 0.5) {
-              console.log(`[align] cache low-quality (segsHit=${st.segsHit}/${st.segments}), regenerating: ${cachePath}`);
+            } else if (hitRatio < 0.7) {
+              console.log(`[align] cache low-quality (segsHit=${st.segsHit}/${effSegments} eff, ratio=${hitRatio.toFixed(2)}), regenerating: ${cachePath}`);
             } else {
               cached.cached = true;
               jsonReply(res, 200, { ok: true, ...cached });
