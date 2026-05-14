@@ -1,5 +1,6 @@
 # Config with secrets
 config.json
+.session-secret
 
 # Generated catalog
 dist/data/catalog.json
