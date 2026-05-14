@@ -23,6 +23,11 @@ const CONFIG_PATH = path.join(DIR, 'config.json');
 const PYTHON = '/usr/bin/python3';
 const TTS_CACHE = '/tmp/obsidian-reader-tts';
 const TTS_VOICE = 'zh-CN-XiaoxiaoNeural';
+const SECRET_PATH = path.join(DIR, '.session-secret');
+const TTS_MAX_TEXT_BYTES = 100 * 1024; // edge-tts argv safety, ~100KB
+const SSE_MAX_PER_IP = 5;
+const AUTH_RATE_WINDOW_MS = 60 * 1000;
+const AUTH_RATE_LIMIT = 10;
 
 // ── Load config ──────────────────────────────────────
 function loadConfig() {
@@ -40,10 +45,62 @@ function saveConfig(cfg) {
 let config = loadConfig();
 
 // ── Auth ─────────────────────────────────────────────
-// Simple token-based auth: client sends password, gets a session token stored in cookie
-const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+// HMAC-based stateless tokens: token = base64url(uid).base64url(hmac(uid))
+// Persisted SESSION_SECRET so tokens survive process restarts.
+function _loadOrCreateSecret() {
+  try {
+    const v = fs.readFileSync(SECRET_PATH, 'utf-8').trim();
+    if (v && v.length >= 32) return v;
+  } catch {}
+  const v = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(SECRET_PATH, v + '\n', { mode: 0o600 });
+    fs.chmodSync(SECRET_PATH, 0o600);
+  } catch (e) { console.warn('[auth] could not persist session secret:', e.message); }
+  return v;
+}
+const _secretRef = { value: _loadOrCreateSecret() };
+function rotateSessionSecret() {
+  const v = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(SECRET_PATH, v + '\n', { mode: 0o600 });
+    fs.chmodSync(SECRET_PATH, 0o600);
+  } catch (e) { console.warn('[auth] rotate persist failed:', e.message); }
+  _secretRef.value = v;
+}
 const _transcribeInProgress = new Set();
-const validTokens = new Set();
+const _ttsInProgress = new Map(); // baseName → Promise of result
+// Rate limiting state
+const _authFails = new Map();     // ip → [timestamp]
+const _sseConnsByIp = new Map();  // ip → count
+
+function _hmac(uid) {
+  return crypto.createHmac('sha256', _secretRef.value).update(uid).digest('base64')
+    .replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+function makeToken() {
+  const uid = crypto.randomBytes(12).toString('hex');
+  return uid + '.' + _hmac(uid);
+}
+function verifyToken(t) {
+  if (!t || typeof t !== 'string') return false;
+  const [uid, mac] = t.split('.');
+  if (!uid || !mac || !/^[a-f0-9]+$/i.test(uid)) return false;
+  const expected = _hmac(uid);
+  if (expected.length !== mac.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(mac)); }
+  catch { return false; }
+}
+function _clientIp(req) {
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+function _rateLimitAuth(ip) {
+  const now = Date.now();
+  const arr = (_authFails.get(ip) || []).filter(t => now - t < AUTH_RATE_WINDOW_MS);
+  arr.push(now);
+  _authFails.set(ip, arr);
+  return arr.length > AUTH_RATE_LIMIT;
+}
 
 // ── Vault basename index (Obsidian-style short-link resolution) ──
 // Maps lowercase basename → vault-relative path. Built lazily, invalidated by watcher.
@@ -105,17 +162,11 @@ function resolveVaultPath(rel) {
   return found;
 }
 
-function makeToken() {
-  const t = crypto.randomBytes(24).toString('hex');
-  validTokens.add(t);
-  return t;
-}
-
 function isAuthed(req) {
   if (!config.password) return true; // no password set = open access
   const cookie = req.headers.cookie || '';
-  const m = cookie.match(/or_token=([a-f0-9]+)/);
-  return m && validTokens.has(m[1]);
+  const m = cookie.match(/or_token=([A-Za-z0-9._\-]+)/);
+  return !!(m && verifyToken(m[1]));
 }
 
 // ── MIME ─────────────────────────────────────────────
@@ -241,23 +292,36 @@ const server = http.createServer(async (req, res) => {
   // Use URL path before any '?' query separator, but for /vault/ paths
   // we need the raw URL since filenames may contain literal '?' characters.
   const rawUrl = req.url;
-  const parsed = url.parse(rawUrl);
-  let pathname = decodeURIComponent(parsed.pathname);
-  // For vault paths: the filename may contain '?' which url.parse splits as query.
-  // Re-derive pathname from the full raw URL for vault requests.
-  if (rawUrl.startsWith('/vault/')) {
-    // Strip only the hash (if any); keep everything else as pathname
-    const hashIdx = rawUrl.indexOf('#');
-    const fullPath = hashIdx >= 0 ? rawUrl.slice(0, hashIdx) : rawUrl;
-    pathname = decodeURIComponent(fullPath);
+  let pathname;
+  try {
+    const parsed = url.parse(rawUrl);
+    pathname = decodeURIComponent(parsed.pathname);
+    if (rawUrl.startsWith('/vault/')) {
+      const hashIdx = rawUrl.indexOf('#');
+      const fullPath = hashIdx >= 0 ? rawUrl.slice(0, hashIdx) : rawUrl;
+      pathname = decodeURIComponent(fullPath);
+    }
+  } catch (e) {
+    res.writeHead(400); res.end('Bad request URI');
+    return;
   }
 
-  // /api/auth - always accessible (login endpoint)
+  // /api/auth - always accessible (login endpoint), rate-limited
   if (pathname === '/api/auth' && req.method === 'POST') {
+    const ip = _clientIp(req);
+    if (_rateLimitAuth(ip)) {
+      jsonReply(res, 429, { ok: false, error: '尝试过于频繁，请稍后再试' });
+      return;
+    }
     const body = await readBody(req);
     try {
       const { password } = JSON.parse(body);
-      if (password === config.password) {
+      const a = Buffer.from(String(password || ''), 'utf-8');
+      const b = Buffer.from(String(config.password || ''), 'utf-8');
+      const ok = a.length === b.length && b.length > 0 && crypto.timingSafeEqual(a, b);
+      if (ok) {
+        // Successful auth resets the failure counter
+        _authFails.delete(ip);
         const token = makeToken();
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -297,15 +361,23 @@ const server = http.createServer(async (req, res) => {
     pathname === '/api/notes' ||
     pathname === '/api/transcribe' ||
     pathname === '/api/transcribe/status' ||
-    pathname === '/api/align';
+    pathname === '/api/align' ||
+    pathname === '/api/events';
 
   if (isProtectedPath && !isAuthed(req)) {
     jsonReply(res, 401, { error: 'Unauthorized' });
     return;
   }
 
-  // /api/events - SSE stream for live updates
+  // /api/events - SSE stream for live updates (per-IP cap + heartbeat)
   if (pathname === '/api/events') {
+    const ip = _clientIp(req);
+    const cur = _sseConnsByIp.get(ip) || 0;
+    if (cur >= SSE_MAX_PER_IP) {
+      jsonReply(res, 429, { error: 'Too many SSE connections' });
+      return;
+    }
+    _sseConnsByIp.set(ip, cur + 1);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -314,7 +386,22 @@ const server = http.createServer(async (req, res) => {
     });
     res.write('data: connected\n\n');
     sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
+    const hb = setInterval(() => {
+      try { res.write(': ping\n\n'); } catch { cleanup(); }
+    }, 30000);
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearInterval(hb);
+      sseClients.delete(res);
+      const left = (_sseConnsByIp.get(ip) || 1) - 1;
+      if (left <= 0) _sseConnsByIp.delete(ip);
+      else _sseConnsByIp.set(ip, left);
+    };
+    req.on('close', cleanup);
+    req.on('error', cleanup);
+    res.on('error', cleanup);
     return;
   }
 
@@ -368,61 +455,65 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /api/tts - generate TTS audio for article
+  // /api/tts - generate TTS audio for article (with concurrency dedup)
   if (pathname === '/api/tts' && req.method === 'POST') {
     const body = await readBody(req);
-    try {
-      const { text, id, voice } = JSON.parse(body);
-      if (!text || !id) {
-        jsonReply(res, 400, { ok: false, error: 'Missing text or id' });
-        return;
-      }
-      // Hash the text content for cache key
-      const hash = crypto.createHash('md5').update(text).digest('hex').slice(0, 12);
-      const safeId = id.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 60);
-      const baseName = `${safeId}_${hash}`;
-      const mp3Path = path.join(TTS_CACHE, baseName + '.mp3');
-      const vttPath = path.join(TTS_CACHE, baseName + '.vtt');
-
-      // Check cache
-      if (fs.existsSync(mp3Path) && fs.existsSync(vttPath)) {
-        jsonReply(res, 200, {
-          ok: true,
-          audio: '/tts-cache/' + baseName + '.mp3',
-          subtitle: '/tts-cache/' + baseName + '.vtt',
-          cached: true
-        });
-        return;
-      }
-
-      // Ensure cache dir
-      fs.mkdirSync(TTS_CACHE, { recursive: true });
-
-      // Generate with edge-tts
-      const useVoice = voice || TTS_VOICE;
-      const { execFile: ef } = require('child_process');
-      ef(PYTHON, [
-        '-m', 'edge_tts',
-        '--voice', useVoice,
-        '--text', text,
-        '--write-media', mp3Path,
-        '--write-subtitles', vttPath
-      ], { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err) {
-          console.error('[tts] generation failed:', stderr || err.message);
-          jsonReply(res, 500, { ok: false, error: 'TTS generation failed', detail: (stderr || '').slice(-300) });
-          return;
-        }
-        jsonReply(res, 200, {
-          ok: true,
-          audio: '/tts-cache/' + baseName + '.mp3',
-          subtitle: '/tts-cache/' + baseName + '.vtt',
-          cached: false
-        });
-      });
-    } catch (e) {
-      jsonReply(res, 400, { ok: false, error: 'Bad request' });
+    let parsed;
+    try { parsed = JSON.parse(body); }
+    catch { jsonReply(res, 400, { ok: false, error: 'Bad request' }); return; }
+    const { text, id, voice } = parsed;
+    if (!text || !id) {
+      jsonReply(res, 400, { ok: false, error: 'Missing text or id' });
+      return;
     }
+    // Reject oversized text early (edge-tts argv limit ~256KB on macOS)
+    if (Buffer.byteLength(text, 'utf-8') > TTS_MAX_TEXT_BYTES) {
+      jsonReply(res, 413, { ok: false, error: '文本过长，请分段（>100KB）' });
+      return;
+    }
+    const hash = crypto.createHash('md5').update(text).digest('hex').slice(0, 12);
+    const safeId = String(id).replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 60);
+    const baseName = `${safeId}_${hash}`;
+    const mp3Path = path.join(TTS_CACHE, baseName + '.mp3');
+    const vttPath = path.join(TTS_CACHE, baseName + '.vtt');
+
+    if (fs.existsSync(mp3Path) && fs.existsSync(vttPath)) {
+      jsonReply(res, 200, {
+        ok: true, audio: '/tts-cache/' + baseName + '.mp3',
+        subtitle: '/tts-cache/' + baseName + '.vtt', cached: true
+      });
+      return;
+    }
+    fs.mkdirSync(TTS_CACHE, { recursive: true });
+
+    // Dedup: if a generation for this baseName is in flight, await it
+    let pending = _ttsInProgress.get(baseName);
+    if (!pending) {
+      const useVoice = voice || TTS_VOICE;
+      pending = new Promise((resolve) => {
+        execFile(PYTHON, [
+          '-m', 'edge_tts',
+          '--voice', useVoice,
+          '--text', text,
+          '--write-media', mp3Path,
+          '--write-subtitles', vttPath
+        ], { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }, (err, _stdout, stderr) => {
+          if (err) resolve({ ok: false, error: stderr || err.message });
+          else resolve({ ok: true });
+        });
+      }).finally(() => _ttsInProgress.delete(baseName));
+      _ttsInProgress.set(baseName, pending);
+    }
+    const out = await pending;
+    if (!out.ok) {
+      console.error('[tts] generation failed:', out.error);
+      jsonReply(res, 500, { ok: false, error: 'TTS generation failed', detail: String(out.error || '').slice(-300) });
+      return;
+    }
+    jsonReply(res, 200, {
+      ok: true, audio: '/tts-cache/' + baseName + '.mp3',
+      subtitle: '/tts-cache/' + baseName + '.vtt', cached: false
+    });
     return;
   }
 
@@ -516,22 +607,19 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const content = fs.readFileSync(notePath, 'utf-8');
-      const normalizedQuote = quote.replace(/\s+/g, ' ').trim();
-      // Split into entry blocks by --- (handle both start-of-file and mid-file separators)
+      const normalizedQuote = normQuote(quote);
       const entries = content.split(/^---\s*$/m);
       let found = false;
       const kept = [];
       for (const entry of entries) {
         const trimmed = entry.trim();
-        if (!trimmed) continue; // empty block
-        // Check if this block contains the target quote
+        if (!trimmed) continue;
         const quoteLines = trimmed.split('\n').filter(l => l.trim().startsWith('> '));
-        const blockQuote = quoteLines.map(l => l.trim().replace(/^>\s?/, '')).join(' ').replace(/\s+/g, ' ').trim();
+        const blockQuote = normQuote(quoteLines.map(l => l.trim().replace(/^>\s?/, '')).join(' '));
         if (blockQuote && normalizedQuote === blockQuote) {
           found = true;
-          continue; // skip this entry
+          continue;
         }
-        // Keep section headers (## [[title]]) even if they have no quote
         kept.push(trimmed);
       }
       if (!found) {
@@ -597,8 +685,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const content = fs.readFileSync(notePath, 'utf-8');
-      const normalizedQuote = quote.replace(/\s+/g, ' ').trim();
-      // Split into entry blocks by ---
+      const normalizedQuote = normQuote(quote);
       const entries = content.split(/^---\s*$/m);
       let found = false;
       const kept = [];
@@ -606,7 +693,7 @@ const server = http.createServer(async (req, res) => {
         const trimmed = entry.trim();
         if (!trimmed) continue;
         const quoteLines = trimmed.split('\n').filter(l => l.trim().startsWith('> '));
-        const blockQuote = quoteLines.map(l => l.trim().replace(/^>\s?/, '')).join(' ').replace(/\s+/g, ' ').trim();
+        const blockQuote = normQuote(quoteLines.map(l => l.trim().replace(/^>\s?/, '')).join(' '));
         if (blockQuote && normalizedQuote === blockQuote && !found) {
           found = true;
           // Rebuild: keep quote, replace note, keep metadata lines
@@ -736,7 +823,8 @@ const server = http.createServer(async (req, res) => {
       // Start transcription asynchronously
       _transcribeInProgress.add(resolved);
       const outputDir = path.dirname(resolved);
-      const proc = spawn('/Users/lhx/Library/Python/3.9/bin/mlx_whisper', [
+      const mlxBin = config.mlxWhisperBin || process.env.MLX_WHISPER_BIN || 'mlx_whisper';
+      const proc = spawn(mlxBin, [
         '--model', 'mlx-community/whisper-large-v3-turbo',
         '--language', 'zh',
         '--output-format', 'vtt',
@@ -765,7 +853,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /api/transcribe/status - GET check transcription status
+  // /api/transcribe/status - POST check transcription status
   if (pathname === '/api/transcribe/status' && req.method === 'POST') {
     if (!isAuthed(req)) { jsonReply(res, 401, { error: 'Unauthorized' }); return; }
     const body = await readBody(req);
@@ -969,21 +1057,34 @@ const server = http.createServer(async (req, res) => {
   }
 
   // /api/password - POST change password
+  // When no password is set, only loopback may initialize one (prevents
+  // any LAN visitor from racing to claim the password on a fresh install).
   if (pathname === '/api/password' && req.method === 'POST') {
     const body = await readBody(req);
     try {
       const { oldPassword, newPassword } = JSON.parse(body);
-      // Verify old password (or no password was set)
-      if (config.password && oldPassword !== config.password) {
-        jsonReply(res, 401, { ok: false, error: '原密码错误' });
-        return;
+      if (!config.password) {
+        const ip = _clientIp(req);
+        const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+        if (!isLoopback) {
+          jsonReply(res, 403, { ok: false, error: '初次设置密码必须在本机（127.0.0.1）操作' });
+          return;
+        }
+      } else {
+        // Has password: must supply correct old password (timing-safe)
+        const a = Buffer.from(String(oldPassword || ''), 'utf-8');
+        const b = Buffer.from(String(config.password), 'utf-8');
+        const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+        if (!ok) {
+          jsonReply(res, 401, { ok: false, error: '原密码错误' });
+          return;
+        }
       }
       config.password = newPassword || '';
       saveConfig(config);
-      // Invalidate all existing tokens
-      validTokens.clear();
+      // Rotate session secret → all outstanding tokens become invalid
+      rotateSessionSecret();
       if (config.password) {
-        // Issue a new token for the current user
         const token = makeToken();
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -1082,17 +1183,17 @@ function scheduleRescan(reason) {
   }, 2000);
 }
 
+let _safetyRescan = null;
 function startWatching(vaultPath) {
   if (_watcher) { try { _watcher.close(); } catch {} }
+  if (_safetyRescan) clearInterval(_safetyRescan);
   if (!vaultPath) return;
   try {
     _watcher = fs.watch(vaultPath, { recursive: true }, (eventType, filename) => {
       if (!filename) return;
-      // Any file or directory change invalidates the basename index
       invalidateBasenameIndex();
-      // Only .md changes and directory renames trigger a catalog rescan
       const ext = path.extname(filename).toLowerCase();
-      const isDir = !ext; // directory events often have no extension
+      const isDir = !ext;
       if (ext === '.md' || isDir) {
         scheduleRescan(`${eventType}: ${filename}`);
       }
@@ -1104,29 +1205,56 @@ function startWatching(vaultPath) {
   } catch (err) {
     console.error('[vault-watch] could not start:', err.message);
   }
+  // Safety net: iCloud Drive sometimes drops fsevents on placeholder downloads.
+  // Re-scan unconditionally every 5 minutes so a missed event self-heals.
+  _safetyRescan = setInterval(() => doRescan('safety-net'), 5 * 60 * 1000);
 }
 
-// ── TTS cache cleanup: remove files older than 7 days ──
+// ── TTS cache cleanup: remove .mp3/.vtt pairs older than 7 days ──
+// Group by basename so a half-stale pair (only mp3 expired) gets the .vtt
+// removed too — otherwise next request thinks cache is incomplete and
+// triggers a wasteful regen.
 function cleanTTSCache() {
   try {
     if (!fs.existsSync(TTS_CACHE)) return;
     const now = Date.now();
     const maxAge = 7 * 24 * 60 * 60 * 1000;
-    let cleaned = 0;
+    const groups = new Map(); // baseName → {mp3?:path, vtt?:path, oldest:mtime}
     for (const f of fs.readdirSync(TTS_CACHE)) {
+      if (!/\.(mp3|vtt)$/i.test(f)) continue;
       const fp = path.join(TTS_CACHE, f);
-      try {
-        const st = fs.statSync(fp);
-        if (st.isFile() && (now - st.mtimeMs) > maxAge) {
-          fs.unlinkSync(fp);
-          cleaned++;
-        }
-      } catch {}
+      let st; try { st = fs.statSync(fp); } catch { continue; }
+      if (!st.isFile()) continue;
+      const base = f.replace(/\.(mp3|vtt)$/i, '');
+      const ext = f.slice(-3).toLowerCase();
+      const g = groups.get(base) || { oldest: Infinity };
+      g[ext] = fp;
+      g.oldest = Math.min(g.oldest, st.mtimeMs);
+      groups.set(base, g);
+    }
+    let cleaned = 0;
+    for (const [, g] of groups) {
+      if (now - g.oldest <= maxAge) continue;
+      for (const k of ['mp3', 'vtt']) {
+        if (g[k]) { try { fs.unlinkSync(g[k]); cleaned++; } catch {} }
+      }
     }
     if (cleaned) console.log(`[tts-cache] cleaned ${cleaned} expired files (>7d)`);
   } catch (e) {
     console.error('[tts-cache] cleanup error:', e.message);
   }
+}
+
+// Normalize a quote for comparison: strip whitespace + most punctuation,
+// fold fullwidth → half, lowercase. Used across save/delete/edit/parse so a
+// trivial whitespace difference doesn't cause "matching entry not found".
+function normQuote(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/[\s　 ]+/g, '')
+    .replace(/[，。！？；："'`'""'']/g, '')
+    .replace(/[,.!?;:'"`]/g, '')
+    .toLowerCase();
 }
 
 // ── Parse 笔记.md file into structured entries ─────

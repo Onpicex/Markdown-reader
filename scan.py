@@ -15,8 +15,13 @@ from typing import Optional, List, Tuple
 try:
     import yaml
 except ImportError:
+    import subprocess
     print("Installing pyyaml package...")
-    os.system(f"{sys.executable} -m pip install pyyaml")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "pyyaml"])
+    except subprocess.CalledProcessError as e:
+        print(f"❌ pip install failed: {e}. Run manually: {sys.executable} -m pip install --user pyyaml", file=sys.stderr)
+        sys.exit(1)
     import yaml
 
 # ── Configuration ──────────────────────────────────────────────────────────────

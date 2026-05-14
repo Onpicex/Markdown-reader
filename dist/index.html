@@ -594,8 +594,9 @@ mark.ann-flash{animation:annFlash .5s ease 3}
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/html2canvas.min.js"></script>
+<script src="vendor/purify.min.js"></script>
 
 <script>
 !function(){"use strict";
@@ -611,11 +612,19 @@ const modalBg=$('modalBg'),cfgVault=$('cfgVault'),cfgCancel=$('cfgCancel'),cfgSa
 const pwOld=$('pwOld'),pwNew=$('pwNew'),pwConfirm=$('pwConfirm'),pwSave=$('pwSave'),pwMsg=$('pwMsg');
 
 // ── Read state (localStorage) ────────────────────────
+// Cache the Set in memory so the entire JSON isn't re-parsed on every isRead()
+// (called per-article in renderSidebar — used to be O(n) parse per render).
+let _readSetCache = null;
 function getReadSet(){
-  try{ return new Set(JSON.parse(localStorage.getItem('readArticles')||'[]')); }catch(e){ return new Set(); }
+  if(_readSetCache) return _readSetCache;
+  try{ _readSetCache = new Set(JSON.parse(localStorage.getItem('readArticles')||'[]')); }
+  catch(e){ _readSetCache = new Set(); }
+  return _readSetCache;
 }
 function saveReadSet(s){
-  try{ localStorage.setItem('readArticles',JSON.stringify([...s])); }catch(e){}
+  _readSetCache = s;
+  try{ localStorage.setItem('readArticles',JSON.stringify([...s])); }
+  catch(e){ console.warn('readArticles save failed (quota?):', e); }
 }
 function markRead(id){
   const s=getReadSet(); s.add(id); saveReadSet(s);
@@ -628,6 +637,15 @@ function toggleRead(id){
   updateReadUI(id);
 }
 function isRead(id){ return getReadSet().has(id); }
+// Drop ids that no longer exist in the catalog (renamed/deleted articles)
+function pruneReadSet(catalog){
+  if(!catalog||!catalog.articles)return;
+  const valid = new Set(catalog.articles.map(a=>a.id));
+  const cur = getReadSet();
+  let removed = 0;
+  for(const id of [...cur]){ if(!valid.has(id)){ cur.delete(id); removed++; } }
+  if(removed){ saveReadSet(cur); console.log('[read] pruned',removed,'orphan ids'); }
+}
 function updateReadUI(id){
   const rd=isRead(id);
   // Update sidebar item
@@ -646,8 +664,15 @@ function updateReadUI(id){
 }
 
 // ── Helpers ──────────────────────────────────────────
-function h(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function ha(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+function h(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function ha(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+// Sanitize Markdown-rendered HTML before injecting via innerHTML.
+// DOMPurify defaults already allow <audio>/<video>/<source> and data-* attrs;
+// we keep that surface and rely on it to strip event handlers, <script>, javascript: URLs, etc.
+function safeHTML(html){
+  if(typeof DOMPurify==='undefined')return html; // fallback (vendor not loaded)
+  return DOMPurify.sanitize(html,{ALLOW_DATA_ATTR:true,ADD_ATTR:['target']});
+}
 function hsh(s){let v=0;for(let i=0;i<s.length;i++){v=((v<<5)-v)+s.charCodeAt(i);v|=0}return'h'+Math.abs(v)}
 
 // ── Image fallback: _assets → same directory ────────
@@ -741,12 +766,12 @@ function convertWikiLinks(md){
     if(/\.(mp3|wav|ogg|m4a)$/i.test(t)){
       const encoded='/vault/'+t.split('/').map(s=>encodeURIComponent(s)).join('/');
       const label=(alt||t.split('/').pop().replace(/\.[^.]+$/,'')).trim();
-      return '<div class="audio-embed" data-audio-path="'+t+'"><div class="audio-label">\ud83c\udfb5 '+label+'</div><audio controls preload="metadata" src="'+encoded+'"></audio><div class="audio-embed-actions"><button class="audio-sub-btn" data-audio-src="'+encoded+'" data-audio-rel="'+t+'">\ud83d\udd24 字幕跟读</button></div></div>';
+      return '<div class="audio-embed" data-audio-path="'+ha(t)+'"><div class="audio-label">\ud83c\udfb5 '+h(label)+'</div><audio controls preload="metadata" src="'+ha(encoded)+'"></audio><div class="audio-embed-actions"><button class="audio-sub-btn" data-audio-src="'+ha(encoded)+'" data-audio-rel="'+ha(t)+'">\ud83d\udd24 字幕跟读</button></div></div>';
     }
     // Video embed → <video> player
     if(/\.(mp4|webm)$/i.test(t)){
       const encoded='/vault/'+t.split('/').map(s=>encodeURIComponent(s)).join('/');
-      return '<div class="video-embed"><video controls preload="metadata" src="'+encoded+'" style="max-width:100%;border-radius:8px"></video></div>';
+      return '<div class="video-embed"><video controls preload="metadata" src="'+ha(encoded)+'"></video></div>';
     }
     // Non-media embed — treat as wiki link
     return '[['+target+(alt?'|'+alt:'')+']]';
@@ -756,9 +781,9 @@ function convertWikiLinks(md){
     const display=alias||target;
     const aid=resolveWikiLink(target);
     if(aid){
-      return '<a class="wl" href="javascript:void(0)" data-wl="'+aid.replace(/"/g,'&quot;')+'">'+h(display)+'</a>';
+      return '<a class="wl" href="javascript:void(0)" data-wl="'+ha(aid)+'">'+h(display)+'</a>';
     }
-    return '<span class="wl wl-broken" title="未找到: '+h(target)+'">'+h(display)+'</span>';
+    return '<span class="wl wl-broken" title="未找到: '+ha(target)+'">'+h(display)+'</span>';
   });
   // Restore checkbox placeholders to proper HTML checkboxes
   md=md.replace(/%%CB_(\d+)%%/g, function(_,idx){
@@ -833,11 +858,15 @@ let catalogEtag=localStorage.getItem('catalog-etag')||'';
 function applyCatalog(data){
   C=data;
   _wikiIndex=null;
+  pruneReadSet(C);
   renderSidebar(C,document.querySelector('.sf')?.value||'');
   restoreSidebarState();
   const ftSpan=sft.querySelector('span');
   ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
-  ws.innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';
+  ws.textContent='';
+  const mk=(num,lbl)=>{const d=document.createElement('div');d.className='st';d.innerHTML='<span class="num"></span><span class="lbl"></span>';d.querySelector('.num').textContent=num;d.querySelector('.lbl').textContent=lbl;return d;};
+  ws.appendChild(mk(C.totalArticles,'篇文章'));
+  ws.appendChild(mk(C.categories.length,'个分类'));
 }
 
 async function fetchCatalog(){
@@ -849,7 +878,21 @@ async function fetchCatalog(){
     const etag=r.headers.get('etag')||'';
     const data=await r.json();
     if(etag){
-      try{localStorage.setItem('catalog-cache',JSON.stringify(data));localStorage.setItem('catalog-etag',etag);catalogEtag=etag;}catch(e){}
+      try{
+        // Trim cache: only keep fields needed to render sidebar + render article shell.
+        // Avoids 5MB localStorage quota issues when catalog grows.
+        const slim={categories:data.categories,totalArticles:data.totalArticles,
+          articles:data.articles.map(a=>({id:a.id,title:a.title,category:a.category,subcategory:a.subcategory,meta:a.meta}))};
+        const s=JSON.stringify(slim);
+        if(s.length<2*1024*1024){
+          localStorage.setItem('catalog-cache',s);
+          localStorage.setItem('catalog-etag',etag);
+          catalogEtag=etag;
+        }else{
+          console.warn('[catalog] cache skip: payload',s.length,'> 2MB');
+          localStorage.removeItem('catalog-cache');
+        }
+      }catch(e){console.warn('[catalog] cache write failed:',e);}
     }
     return data;
   }catch(e){console.error('[catalog] fetch failed',e);return null;}
@@ -1153,7 +1196,7 @@ async function loadArticle(id){
     let navHtml='';
     if(nav.prev)navHtml+='<button class="nav-btn" data-nav="'+ha(nav.prev.id)+'">⏮ '+h(nav.prev.title)+'</button>';
     if(nav.next)navHtml+='<button class="nav-btn" data-nav="'+ha(nav.next.id)+'">'+h(nav.next.title)+' ⏭</button>';
-    ct.innerHTML='<div class="article"><div class="art-hd"><h1>'+h(title)+'</h1>'+(metaHtml?'<div class="art-meta">'+metaHtml+'</div>':'')+'<div class="art-actions">'+rdBtn+'</div></div><div class="art-body">'+htmlContent+'</div><div class="art-ft">'+rdBtn+navHtml+'</div></div>';
+    ct.innerHTML='<div class="article"><div class="art-hd"><h1>'+h(title)+'</h1>'+(metaHtml?'<div class="art-meta">'+metaHtml+'</div>':'')+'<div class="art-actions">'+rdBtn+'</div></div><div class="art-body">'+safeHTML(htmlContent)+'</div><div class="art-ft">'+rdBtn+navHtml+'</div></div>';
     ct.scrollTop=0;
     // Bind read-toggle buttons
     ct.querySelectorAll('.read-toggle').forEach(btn=>btn.addEventListener('click',()=>toggleRead(id)));
@@ -1388,7 +1431,11 @@ pwSave.addEventListener('click',async function(){
 let searchTimer;
 search.addEventListener('input',function(){
   clearTimeout(searchTimer);
-  searchTimer=setTimeout(()=>{if(C)renderSidebar(C,search.value.trim())},200);
+  searchTimer=setTimeout(()=>{
+    if(!C)return;
+    // Defer heavy DOM rebuild to next frame so keystrokes feel snappy
+    requestAnimationFrame(()=>renderSidebar(C,search.value.trim()));
+  },200);
 });
 
 // ── Theme toggle (multi-theme with panel) ────────────
@@ -1884,7 +1931,7 @@ document.addEventListener('mouseover',function(e){
     const data=JSON.parse(decodeURIComponent(dataStr));
     let html='';
     if(data.note)html+='<div class="ann-tt-note">'+h(data.note)+'</div>';
-    html+='<div class="ann-tt-date">'+(data.note?'📝 ':'🖍️ ')+(data.date||'划线')+'</div>';
+    html+='<div class="ann-tt-date">'+(data.note?'📝 ':'🖍️ ')+(h(data.date||'划线'))+'</div>';
     annTooltip.innerHTML=html;
     const rect=mark.getBoundingClientRect();
     let left=rect.left+rect.width/2;
@@ -2185,7 +2232,7 @@ const TTS={
         this.audio.playbackRate=this.speed;
         this.playing=true;
         this.paused=false;
-        this.audio.play();
+        this.audio.play().catch(e=>this._onPlayFail(e));
         this.updateUI();
         return;
       }
@@ -2478,7 +2525,7 @@ const TTS={
   async play(){
     // Resume from pause
     if(this.paused&&this.audio){
-      this.audio.play();
+      this.audio.play().catch(e=>this._onPlayFail(e));
       this.paused=false;
       this.playing=true;
       this.updateUI();
@@ -2502,7 +2549,7 @@ const TTS={
         this.audio.currentTime=0;
       }
       this.audio.playbackRate=this.speed;
-      this.audio.play();
+      this.audio.play().catch(e=>this._onPlayFail(e));
       this.playing=true;
       this.paused=false;
       this.updateUI();
@@ -2572,17 +2619,17 @@ const TTS={
         // loadedmetadata means duration is known and seeking is possible
         if(aud.readyState>=1){
           doSeek();
-          aud.play();
+          aud.play().catch(e=>this._onPlayFail(e));
         }else{
-          aud.addEventListener('loadedmetadata',function(){
+          aud.addEventListener('loadedmetadata',()=>{
             doSeek();
-            aud.play();
+            aud.play().catch(e=>this._onPlayFail(e));
           },{once:true});
           // Trigger loading
           aud.load();
         }
       }else{
-        this.audio.play();
+        this.audio.play().catch(e=>this._onPlayFail(e));
       }
     }catch(e){
       const msg=(e&&e.message)?e.message:String(e);
@@ -2595,6 +2642,7 @@ const TTS={
     }
   },
 
+  _onPlayFail(e){console.warn('[tts] play() rejected:',e);this.playing=false;this.paused=false;this.updateUI();},
   pause(){
     if(this.audio&&this.playing){
       this.audio.pause();
@@ -2661,13 +2709,18 @@ const TTS={
   },
 
   highlightSegment(seg){
-    this.clearHighlight();
+    if(this._hlEl===seg?.el)return;
+    if(this._hlEl){try{this._hlEl.classList.remove('tts-highlight')}catch{}}
+    this._hlEl=null;
     if(!seg||!seg.el)return;
     seg.el.classList.add('tts-highlight');
+    this._hlEl=seg.el;
     scrollElIntoView(seg.el);
   },
 
   clearHighlight(){
+    if(this._hlEl){try{this._hlEl.classList.remove('tts-highlight')}catch{}this._hlEl=null;}
+    // Defensive: also clear any stragglers in case DOM was rebuilt
     document.querySelectorAll('.tts-highlight').forEach(el=>el.classList.remove('tts-highlight'));
   },
 

@@ -61,7 +61,7 @@ pip install sentence-transformers  # 可选,语义对齐
 - mlx-whisper 模型:`mlx-community/whisper-large-v3-turbo`(首次使用自动下载,约 1.5GB)
 - embedding 模型:`BAAI/bge-small-zh-v1.5`(首次使用自动下载,约 90MB)
 - 性能:12 分钟音频 ≈ 1.5 分钟转录(Apple Silicon)
-- 注意:`server.js` 第 ~683 行的 mlx_whisper CLI 路径可能需要根据你的 Python 安装路径调整
+- 注意:mlx_whisper CLI 路径优先读 `config.json` 的 `mlxWhisperBin`，否则读环境变量 `MLX_WHISPER_BIN`，最后回退到 `PATH` 中的 `mlx_whisper`
 
 ### 前端(已内置,无需安装)
 
@@ -121,7 +121,7 @@ pip install sentence-transformers  # 可选,语义对齐
               ├── /api/transcribe → POST 发起音频转录
               ├── /api/transcribe/status → POST 查询转录进度
               ├── /api/align     → POST 语义 Embedding 对齐(自动缓存)
-              └── /api/events    → SSE 实时目录更新推送
+              └── /api/events    → SSE 实时目录更新推送(需鉴权,单 IP ≤5 连接,30s 心跳)
 ```
 
 - **前端**:单页应用,[marked.js](https://github.com/markedjs/marked) 浏览器端实时渲染 Markdown,[html2canvas](https://github.com/niklasvh/html2canvas) 生成书摘图片
@@ -170,8 +170,11 @@ cp config.example.json config.json
 | `vault` | Obsidian vault 绝对路径 |
 | `port` | 服务端口(默认 8765) |
 | `bind` | 绑定地址(`0.0.0.0` 允许局域网访问,`127.0.0.1` 仅本机) |
-| `password` | 访问密码(留空 `""` 关闭密码功能) |
+| `password` | 访问密码(留空 `""` 关闭密码功能;**首次设置必须从 127.0.0.1 操作**) |
 | `ttsEnabled` | TTS 听书功能开关(默认 `false`,设为 `true` 显示所有 TTS 相关按钮) |
+| `mlxWhisperBin` | (可选)mlx_whisper 可执行文件路径,默认从 `PATH` 解析 |
+
+> 安全说明:`/api/auth` 同 IP 60s 内 ≤10 次失败;成功认证签发 HMAC token(基于 `.session-secret` 文件,文件丢失会强制所有人重登);改密码会轮换 secret,所有旧 token 失效。
 
 ### 当前部署约定
 

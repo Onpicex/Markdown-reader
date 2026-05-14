@@ -17,7 +17,9 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') [start] Obsidian Reader starting..." | tee -a
 # ── Scan vault for catalog ────────────────────────────
 echo "$(date '+%Y-%m-%d %H:%M:%S') [scan] Generating catalog..." | tee -a "$LOG"
 cd "$DIR"
-$PYTHON scan.py >> "$LOG" 2>&1 || echo "$(date '+%Y-%m-%d %H:%M:%S') [scan] Warning: scan failed (vault may not be ready)" | tee -a "$LOG"
+if ! $PYTHON scan.py >> "$LOG" 2>&1; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') [scan] Warning: scan failed (vault may not be ready)" | tee -a "$LOG"
+fi
 echo "$(date '+%Y-%m-%d %H:%M:%S') [scan] Catalog step done" | tee -a "$LOG"
 
 # ── Start Node.js server ─────────────────────────────

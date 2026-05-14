@@ -374,26 +374,23 @@ def align(segments, cues, model):
             for cue_idx in chunk_indices[ci]:
                 cue_to_seg[cue_idx] = orig_segs[0]  # placeholder
     
+    # Pre-build vi → [chunk_index] reverse map (was nested O(C·N_cues) below)
+    vi_to_chunks = {}
+    for ci, vi in enumerate(chunk_vassignments):
+        vi_to_chunks.setdefault(vi, []).append(ci)
+    # Pre-build run_start → vseg index map
+    run_to_vi = {orig_segs[0]: vi for vi, orig_segs in enumerate(vseg_map) if len(orig_segs) > 1}
+
     # For dialogue runs: collect all cues assigned to them and redistribute
     for rs, re_ in dialogue_runs:
-        # Find which virtual segment contains this run
-        vi_for_run = None
-        for vi, orig_segs in enumerate(vseg_map):
-            if len(orig_segs) > 1 and orig_segs[0] == rs:
-                vi_for_run = vi
-                break
+        vi_for_run = run_to_vi.get(rs)
         if vi_for_run is None:
             continue
-        
-        # Collect all cues assigned to this virtual segment
+
         run_cues = []
-        for cue_idx in range(len(cues)):
-            # Check if this cue's chunk was assigned to this vseg
-            for ci, vi in enumerate(chunk_vassignments):
-                if vi == vi_for_run:
-                    if cue_idx in chunk_indices[ci]:
-                        run_cues.append(cue_idx)
-        
+        for ci in vi_to_chunks.get(vi_for_run, ()):
+            run_cues.extend(chunk_indices[ci])
+
         if not run_cues:
             continue
         
@@ -832,9 +829,9 @@ def main():
     t0 = time.time()
     
     # Read files
-    with open(article_path, 'r') as f:
+    with open(article_path, 'r', encoding='utf-8') as f:
         md_text = f.read()
-    with open(vtt_path, 'r') as f:
+    with open(vtt_path, 'r', encoding='utf-8') as f:
         vtt_text = f.read()
     
     segments = parse_segments(md_text)
@@ -876,7 +873,7 @@ def main():
     }
     
     if output_path:
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(result, f)
         print(json.dumps(stats), file=sys.stderr)
     else:
