@@ -2897,10 +2897,12 @@ const InlineAudio={
         }else if(segTimeRanges.length>0){
           sIdx=0;
         }
-        // Forward-only unless explicit seek (time jumped back >1s)
+        // Forward-only unless explicit seek (time jumped back >1s).
+        // Allow small backward corrections (within 2 segments) so a brief
+        // alignment overshoot can self-correct on the next tick.
         if(sIdx>=0){
           const isSeeking=lastT>=0&&t<lastT-1.0;
-          if(!isSeeking&&curIdx>=0&&sIdx<curIdx)sIdx=curIdx;
+          if(!isSeeking&&curIdx>=0&&sIdx<curIdx-2)sIdx=curIdx;
         }
         lastT=t;
         if(sIdx>=0&&sIdx!==curIdx){

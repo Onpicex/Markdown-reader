@@ -156,6 +156,16 @@ def parse_vtt(vtt_text):
         cues.pop(0)
     while len(cues) > 1 and _is_hallucination(cues[-1]):
         cues.pop()
+    # Drop low-unique-char repetition cues anywhere in the file (whisper-turbo
+    # failure mode: "划划划划划划划划" repeating for many short cues when
+    # transcribing music or stuck on a loop). These match nothing in the
+    # article and pollute embedding alignment. Threshold: normalized text has
+    # ≤2 unique chars and length ≥4 → drop. Keep dialogue like "嗯嗯" (len 2)
+    # and short legit phrases by requiring len≥4.
+    cues = [
+        c for c in cues
+        if not (len(set(norm_text(c['text']))) <= 2 and len(norm_text(c['text'])) >= 4)
+    ]
     # Trim within-cue repetition-loop hallucinations (mlx-whisper-turbo's
     # signature failure mode). Example real case: a 30s cue whose tail is
     # "一百一百一百…" × 78. Without trimming, align.py expands the
@@ -208,9 +218,18 @@ def parse_vtt(vtt_text):
                 cut_at_orig = oi + 1
                 break
         c['text'] = c['text'][:cut_at_orig]
-        # Shrink duration proportionally: Whisper's end timestamp was
-        # inflated by the repetition spew, but its start is trustworthy.
-        c['end'] = c['start'] + dur * retain_ratio
+        # Shrink duration: Whisper's end timestamp was inflated by the
+        # repetition spew, but its start is trustworthy. We use TWO bounds
+        # and take the tighter one:
+        #   1. Proportional: dur * retain_ratio (text-based)
+        #   2. Speech-rate cap: retained_chars * 0.4s/char (Chinese ≈2.5
+        #      chars/s; this catches the case where the legitimate prefix
+        #      is itself crammed into a window where audio mostly contains
+        #      a different paragraph than what Whisper transcribed).
+        kept_norm_chars = len(norm_text(c['text']))
+        cap_by_speech = kept_norm_chars * 0.4
+        cap_by_ratio = dur * retain_ratio
+        c['end'] = c['start'] + min(cap_by_ratio, max(cap_by_speech, 0.5))
     # Strip trailing hallucinated/repeated cues
     if len(cues) > 10:
         tail_start = max(0, len(cues) - 30)
@@ -343,8 +362,11 @@ def align(segments, cues, model):
     
     vn = len(vseg_list)
     
-    # Merge cues into chunks for better embedding quality
-    chunks, chunk_indices = merge_cues(cues, target_len=40)
+    # Merge cues into chunks for better embedding quality.
+    # target_len=20 keeps chunks small enough that short segments (H2 headings,
+    # short paragraphs) can win their own chunk instead of being swallowed by a
+    # 40-char chunk that straddles a paragraph break.
+    chunks, chunk_indices = merge_cues(cues, target_len=20)
     
     # Encode all texts
     vseg_texts = [s[:300] for s in vseg_list]  # cap; merged segs can be longer
@@ -363,7 +385,7 @@ def align(segments, cues, model):
     # for skipping >= 1 vseg. This prevents local-greedy wedging where one over-eager
     # forward jump traps all subsequent chunks at a wrong segment.
     C = len(chunks)
-    SKIP_PENALTY = 0.05
+    SKIP_PENALTY = 0.15
     START_PENALTY = 0.05  # penalize starting beyond vseg 0
 
     dp = np.full((C, vn), -np.inf, dtype=np.float64)
@@ -504,51 +526,76 @@ def align(segments, cues, model):
     # Only attempt backfill for segments with enough text (>20 chars);
     # very short segments (e.g. "《金刚经》属于玄妙的佛学。") are better handled
     # by the interpolation/borrow pass since they occupy little audio time.
-    assigned_segs = set(chunk_assignments)
-    for si in range(n):
-        if si in assigned_segs:
-            continue
-        # Skip very short text segments — they flash by in audio anyway
-        if len(segments[si]) < 20:
-            continue
-        # Skip segments in the last 10% (usually non-spoken, e.g. "划重点")
-        if si >= n * 0.9:
-            continue
-        
-        prev_si = si - 1 if si > 0 else None
-        next_si = si + 1 if si < n - 1 else None
-        
-        best_ci = -1
-        best_sim = 0.0
-        
-        for ci in range(len(chunks)):
-            a = chunk_assignments[ci]
-            # Only consider chunks assigned to immediate neighbors
-            if a != prev_si and a != next_si:
+    #
+    # Two rounds: round 1 only steals from IMMEDIATE neighbors (the original,
+    # conservative behavior). Round 2 walks outward up to ±5 segs to find the
+    # nearest mapped donor — needed when MANY consecutive segs were skipped,
+    # because in round 1 their immediate neighbors are also empty so the loop
+    # short-circuits. Round 1 first lets the easy cases land, so round 2 has
+    # round-1 successes as new in-range donors.
+    #
+    # sim_matrix is (C, vn) but seg indices are in [0, n) where n >= vn when
+    # dialogue runs merged consecutive segs. Look up via seg→vi mapping.
+    seg_to_vi = {}
+    for _vi, _segs in enumerate(vseg_map):
+        for _si in _segs:
+            seg_to_vi[_si] = _vi
+    def _sim_for_seg(ci, si):
+        vi = seg_to_vi.get(si)
+        if vi is None or vi >= sim_matrix.shape[1]:
+            return 0.0
+        return float(sim_matrix[ci, vi])
+
+    def _do_backfill(round_n):
+        assigned_segs = set(chunk_assignments)
+        for si in range(n):
+            if si in assigned_segs:
                 continue
-            s = float(sim_matrix[ci, si])
-            if s > best_sim:
-                best_sim = s
-                best_ci = ci
-        
-        if best_ci >= 0 and best_sim >= 0.55:
-            cur_a = chunk_assignments[best_ci]
-            cur_sim = float(sim_matrix[best_ci, cur_a])
-            cur_count = sum(1 for a in chunk_assignments if a == cur_a)
-            # Only steal if the match is close enough or donor has plenty of chunks
-            if best_sim >= cur_sim - 0.15 or cur_count > 3:
-                chunk_assignments[best_ci] = si
-                # Also grab adjacent chunks that match well
-                for delta in [-1, 1]:
-                    adj_ci = best_ci + delta
-                    if 0 <= adj_ci < len(chunks):
-                        adj_sim = float(sim_matrix[adj_ci, si])
-                        adj_cur = chunk_assignments[adj_ci]
-                        adj_cur_sim = float(sim_matrix[adj_ci, adj_cur])
-                        adj_cur_count = sum(1 for a in chunk_assignments if a == adj_cur)
-                        if adj_sim >= 0.5 and (adj_sim >= adj_cur_sim - 0.1 or adj_cur_count > 4):
-                            chunk_assignments[adj_ci] = si
-    
+            if len(segments[si]) < 20:
+                continue
+
+            if round_n == 1:
+                donors = set()
+                if si > 0: donors.add(si - 1)
+                if si < n - 1: donors.add(si + 1)
+            else:
+                # Walk outward up to ±5 to find nearest MAPPED segs on each side
+                donors = set()
+                for d in range(1, 6):
+                    if si - d >= 0 and (si - d) in assigned_segs:
+                        donors.add(si - d); break
+                for d in range(1, 6):
+                    if si + d < n and (si + d) in assigned_segs:
+                        donors.add(si + d); break
+
+            best_ci = -1
+            best_sim = 0.0
+            for ci in range(len(chunks)):
+                if chunk_assignments[ci] not in donors:
+                    continue
+                s = _sim_for_seg(ci, si)
+                if s > best_sim:
+                    best_sim = s
+                    best_ci = ci
+
+            if best_ci >= 0 and best_sim >= 0.55:
+                cur_a = chunk_assignments[best_ci]
+                cur_sim = _sim_for_seg(best_ci, cur_a)
+                cur_count = sum(1 for a in chunk_assignments if a == cur_a)
+                if best_sim >= cur_sim - 0.15 or cur_count > 3:
+                    chunk_assignments[best_ci] = si
+                    assigned_segs.add(si)
+    _do_backfill(1)
+    _do_backfill(2)
+
+    # Re-run round 2 to catch chains that needed multiple iterations (each
+    # rescue gives the next attempt a new donor). Cap at 3 sweeps to bound work.
+    for _ in range(2):
+        before = sum(1 for ca in set(chunk_assignments))
+        _do_backfill(2)
+        if sum(1 for ca in set(chunk_assignments)) == before:
+            break
+
     # Restore monotonicity after backfill (fix any inversions)
     for ci in range(1, len(chunk_assignments)):
         if chunk_assignments[ci] < chunk_assignments[ci - 1]:
@@ -610,6 +657,15 @@ def align(segments, cues, model):
                 return True
         return False
 
+    # Pre-compute which segs are currently empty (skipped by DTW/backfill).
+    # Snap may ONLY target empty segs — otherwise a cue that spuriously matches
+    # (via shared character like "初段") a heavily-used downstream seg snaps
+    # forward, then the monotonicity force-up drags every subsequent cue with
+    # it, erasing legitimate mappings to intermediate segs. Real-world failure:
+    # cue 42 "也就是拿到初段" was snapping to seg 10 "所谓初段的闭环..." at
+    # sim 0.57, dragging 20 cues with it and wiping segs 7/8/9.
+    _occupied_segs = set(seg_map)
+
     last_assigned = 0
     for ci in range(len(cues)):
         cur_seg = seg_map[ci]
@@ -623,12 +679,15 @@ def align(segments, cues, model):
         for si in range(cur_seg + 1, min(n, cur_seg + 1 + SNAP_LOOKAHEAD)):
             if len(segments[si]) > MAX_HEADING_LEN:
                 continue
+            if si in _occupied_segs:
+                continue
             sim = _snap_sim(cue_text, segments[si])
             if sim >= SNAP_MIN_SIM and sim >= cur_sim + SNAP_GAIN and sim > best_sim:
                 best_si = si
                 best_sim = sim
         if best_si != cur_seg:
             seg_map[ci] = best_si
+            _occupied_segs.add(best_si)
         last_assigned = seg_map[ci]
 
     # --- Per-cue boundary refinement pass ---
@@ -763,7 +822,14 @@ def align(segments, cues, model):
             
             start_t = prev_end
         elif prev_end is not None:
-            gap_time = 0.5 * (run_end_idx - run_start_idx + 1)
+            # Trailing unmapped run (e.g. ending headings / 划重点 that the
+            # aligner failed to anchor). Use the remaining audio time so the
+            # later clamp-to-audio_end doesn't collapse everything to zero
+            # width. If audio_end <= prev_end (last cue is already at file
+            # end), fall back to 0.5s per segment.
+            remaining = max(0, audio_end - prev_end)
+            min_dur = 0.5 * (run_end_idx - run_start_idx + 1)
+            gap_time = max(remaining, min_dur)
             start_t = prev_end
         elif next_start is not None:
             gap_time = 0.5 * (run_end_idx - run_start_idx + 1)
@@ -912,7 +978,7 @@ def main():
     # ALIGN_VERSION and regenerates on mismatch.
     segs_hit = len(set(seg_map))
     stats = {
-        'version': 9,
+        'version': 13,
         'segments': len(segments),
         'cues': len(cues),
         'segsHit': segs_hit,

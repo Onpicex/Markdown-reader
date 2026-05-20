@@ -824,12 +824,30 @@ const server = http.createServer(async (req, res) => {
       _transcribeInProgress.add(resolved);
       const outputDir = path.dirname(resolved);
       const mlxBin = config.mlxWhisperBin || process.env.MLX_WHISPER_BIN || 'mlx_whisper';
+      // mlx_whisper writes output as <stem-before-first-dot>.vtt when the
+      // input stem contains dots (e.g. "19.0726丨03 初段-闭环...mp3" →
+      // "19.vtt", clobbering siblings). Use a dot-free temp stem via
+      // --output-name then rename. Same workaround as the central generator
+      // at ~/.hermes/scripts/openclaw_generate_audio_vtt.py.
+      const tmpStem = 'ocw_vtt_' + crypto.randomBytes(4).toString('hex');
+      const tmpVtt = path.join(outputDir, tmpStem + '.vtt');
+      // Anti-hallucination flags, kept in sync with the central VTT generator
+      // at ~/.hermes/scripts/openclaw_generate_audio_vtt.py — see that file
+      // for rationale on each flag. Summary: --word-timestamps + max-words
+      // -per-line splits any 30s mega-cue from repetition loops into short
+      // cues; --hallucination-silence-threshold skips long silence;
+      // --compression-ratio-threshold tightens fallback.
       const proc = spawn(mlxBin, [
         '--model', 'mlx-community/whisper-large-v3-turbo',
         '--language', 'zh',
         '--output-format', 'vtt',
         '--condition-on-previous-text', 'False',
+        '--word-timestamps', 'True',
+        '--max-words-per-line', '8',
+        '--hallucination-silence-threshold', '2',
+        '--compression-ratio-threshold', '2.0',
         '--output-dir', outputDir,
+        '--output-name', tmpStem,
         resolved
       ], { timeout: 600000 });
       let stderr = '';
@@ -837,9 +855,20 @@ const server = http.createServer(async (req, res) => {
       proc.on('close', (code) => {
         _transcribeInProgress.delete(resolved);
         if (code === 0) {
-          console.log('[transcribe] OK:', audioPath);
+          try {
+            if (fs.existsSync(tmpVtt)) {
+              if (fs.existsSync(vttPath)) fs.unlinkSync(vttPath);
+              fs.renameSync(tmpVtt, vttPath);
+              console.log('[transcribe] OK:', audioPath);
+            } else {
+              console.error('[transcribe] OK exit but tmp vtt missing:', tmpVtt);
+            }
+          } catch (e) {
+            console.error('[transcribe] rename failed:', e.message);
+          }
         } else {
           console.error('[transcribe] failed:', audioPath, stderr.slice(-300));
+          try { if (fs.existsSync(tmpVtt)) fs.unlinkSync(tmpVtt); } catch {}
         }
       });
       proc.on('error', (err) => {
@@ -917,7 +946,7 @@ const server = http.createServer(async (req, res) => {
             //  (1) version mismatch (align.py logic changed) → regenerate
             //  (2) low quality (<50% of segments hit by any cue) → regenerate
             const st = cached.stats || {};
-            const ALIGN_VERSION = 9;
+            const ALIGN_VERSION = 13;
             const cachedVer = st.version || 0;
             // Bonus credit for segments that don't appear in audio (footnotes,
             // 划重点 summary lists) — they correctly stay unmapped. Without
