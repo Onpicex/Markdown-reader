@@ -2,8 +2,17 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>知识库阅读器</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<meta name="theme-color" content="#B8860B" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1a1a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="知识库">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -181,7 +190,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .ov.on{display:block}
 
 /* ── TTS 听书 ────────────────────────────────────── */
-.tts-bar{display:none;align-items:center;gap:8px;padding:6px 14px;background:var(--bg);border-top:1px solid var(--border);flex-shrink:0;transition:background var(--tr)}
+.tts-bar{display:none;align-items:center;gap:8px;padding:6px 14px calc(6px + env(safe-area-inset-bottom)) 14px;background:var(--bg);border-top:1px solid var(--border);flex-shrink:0;transition:background var(--tr)}
 .tts-bar.on{display:flex}
 .tts-btn{background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:13px;color:var(--text-2);cursor:pointer;font-family:var(--font);transition:all var(--tr);white-space:nowrap;display:flex;align-items:center;gap:4px}
 .tts-btn:hover{border-color:var(--gold-light);color:var(--text)}
@@ -201,7 +210,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 
 /* Edit mode */
 .edit-wrap{max-width:var(--max-w);margin:0 auto;display:flex;flex-direction:column;height:100%}
-.edit-toolbar{display:flex;align-items:center;gap:8px;padding:12px 0;flex-shrink:0}
+.edit-toolbar{display:flex;align-items:center;gap:8px;padding:12px 0;flex-shrink:0;position:sticky;top:0;background:var(--bg);z-index:10}
 .edit-toolbar button{padding:6px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font);border:1px solid var(--border);background:var(--bg);color:var(--text-2);transition:all var(--tr)}
 .edit-toolbar button:hover{border-color:var(--gold-light);color:var(--text)}
 .edit-toolbar .edit-save{background:var(--gold);color:#fff;border-color:var(--gold)}
@@ -215,7 +224,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .tts-slider::before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
 #cfgTts:checked+.tts-slider{background:var(--gold)}
 #cfgTts:checked+.tts-slider::before{transform:translateX(20px)}
-.btt{position:fixed;bottom:24px;right:24px;width:38px;height:38px;border-radius:50%;background:var(--gold);color:#fff;border:none;font-size:16px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;z-index:50;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.btt{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom));right:24px;width:38px;height:38px;border-radius:50%;background:var(--gold);color:#fff;border:none;font-size:16px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;z-index:50;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.12)}
 .btt.vis{opacity:1;transform:translateY(0)}
 .btt:hover{background:var(--gold-light)}
 
@@ -332,16 +341,18 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
   .tb-btn{padding:2px 7px;font-size:12px}
   .welcome{margin:60px auto;padding:0 16px}
   .welcome h2{font-size:18px}
-  .modal{padding:20px 16px;width:95%}
+  .modal{padding:20px 16px;width:95%;max-height:85vh;overflow-y:auto}
   .login-box{padding:0 16px}
+  .edit-toolbar .edit-hint{display:none}
+  .edit-textarea{min-height:200px;font-size:13px;padding:12px 14px}
 }
 @media(max-width:420px){
   .content{padding:16px 24px 50px}
   .art-hd h1{font-size:18px}
   .art-body{font-size:calc(var(--fs) - 2px)}
   .bc{max-width:100px;font-size:11px}
-  .side{width:85vw;min-width:85vw}
-  .btt{bottom:16px;right:16px;width:34px;height:34px;font-size:14px}
+  .side{width:80vw;min-width:80vw;max-width:340px}
+  .btt{bottom:calc(16px + env(safe-area-inset-bottom));right:16px;width:34px;height:34px;font-size:14px}
   .toolbar{padding:6px 8px}
   .tb-r{gap:4px}
   .tb-btn{padding:2px 5px;font-size:11px}
@@ -369,7 +380,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .audio-sub-btn:disabled{opacity:.6;cursor:not-allowed}
 
 /* Toast */
-.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);padding:10px 24px;background:rgba(0,0,0,.78);color:#fff;border-radius:8px;font-size:14px;font-family:var(--font);z-index:9999;pointer-events:none;opacity:0;transition:opacity .25s}
+.toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:10px 24px;background:rgba(0,0,0,.78);color:#fff;border-radius:8px;font-size:14px;font-family:var(--font);z-index:9999;pointer-events:none;opacity:0;transition:opacity .25s}
 .toast.vis{opacity:1}
 
 /* ── Annotation highlights (from 笔记.md) ── */
@@ -397,7 +408,7 @@ mark.ann-note:hover{background:rgba(76,175,80,.32)}
 @keyframes annFlash{0%{background:rgba(255,193,7,.5)}50%{background:rgba(255,193,7,.15)}100%{background:rgba(255,193,7,.5)}}
 mark.ann-flash{animation:annFlash .5s ease 3}
 /* ── Theme picker panel ─────────────────── */
-.theme-panel{display:none;position:absolute;right:0;top:100%;margin-top:6px;background:var(--bg);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:160;padding:8px;min-width:160px;animation:themeIn .15s ease}
+.theme-panel{display:none;position:absolute;right:0;top:100%;margin-top:6px;background:var(--bg);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:160;padding:8px;min-width:160px;max-width:calc(100vw - 16px);animation:themeIn .15s ease}
 @keyframes themeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .theme-panel.on{display:block}
 .theme-panel-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:7px;cursor:pointer;transition:background .12s;font-size:13px;color:var(--text);white-space:nowrap}
@@ -628,9 +639,44 @@ function saveReadSet(s){
 }
 function markRead(id){
   const s=getReadSet(); s.add(id); saveReadSet(s);
+  _pushReadState('add',id);
 }
 function unmarkRead(id){
   const s=getReadSet(); s.delete(id); saveReadSet(s);
+  _pushReadState('remove',id);
+}
+// Fire-and-forget POST to keep server in sync. Failures are logged, not retried —
+// next syncReadState() on app load will reconcile via union merge.
+function _pushReadState(action,id){
+  fetch('/api/read-state/'+action,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id})
+  }).catch(e=>console.warn('[read-state] '+action+' failed:',e));
+}
+// Initial sync: pull server set, union-merge with local, push any local-only ids back.
+// Called from init() after catalog is available so we can re-render the sidebar.
+async function syncReadState(){
+  try{
+    const r=await fetch('/api/read-state',{cache:'no-store'});
+    if(!r.ok)return false;
+    const data=await r.json();
+    if(!data||!Array.isArray(data.articles))return false;
+    const serverSet=new Set(data.articles);
+    const localSet=getReadSet();
+    const localOnly=[...localSet].filter(x=>!serverSet.has(x));
+    const merged=new Set([...serverSet,...localSet]);
+    _readSetCache=merged;
+    try{localStorage.setItem('readArticles',JSON.stringify([...merged]));}catch(e){}
+    if(localOnly.length){
+      fetch('/api/read-state/add',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ids:localOnly})
+      }).catch(e=>console.warn('[read-state] migrate-push failed:',e));
+    }
+    return true;
+  }catch(e){console.warn('[read-state] sync failed:',e);return false;}
 }
 function toggleRead(id){
   if(isRead(id)){unmarkRead(id)}else{markRead(id)}
@@ -904,6 +950,8 @@ function refreshCatalog(){
 
 async function init(){
   if(inited)return;inited=true;
+  // Pull server-side read state in parallel with catalog (cross-device sync).
+  const readSyncP=syncReadState();
   try{
     // 1. Instant render from localStorage cache
     const cached=localStorage.getItem('catalog-cache');
@@ -914,6 +962,13 @@ async function init(){
     const data=await fetchCatalog();
     if(data){applyCatalog(data);console.log('[catalog] updated from server, '+data.totalArticles+' articles');}
     else if(!cached){snav.innerHTML='<div class="ld">加载失败</div>';return;}
+    // 3. After server read-state sync resolves, re-render sidebar so newly-pulled marks show.
+    if(await readSyncP && C){
+      renderSidebar(C,document.querySelector('.sf')?.value||'');
+      restoreSidebarState();
+      // Also refresh any read-toggle button currently on screen.
+      if(curId)updateReadUI(curId);
+    }
     // Load article from hash
     const id=location.hash.slice(1);
     if(id)loadArticle(decodeURIComponent(id));
@@ -1486,6 +1541,40 @@ function closeSide(){side.classList.remove('open');ov.classList.remove('on')}
 ham.addEventListener('click',openSide);
 ov.addEventListener('click',closeSide);
 
+// Swipe gestures for sidebar (touch devices only).
+// - Edge-swipe right from the left ~20px → openSide
+// - Swipe left on an open sidebar → closeSide
+(function(){
+  const EDGE_PX=24;       // start zone for opening
+  const MIN_DX=60;        // minimum horizontal distance
+  const MAX_DY_RATIO=0.6; // |dy|/|dx| must be small (mostly horizontal)
+  const MAX_DURATION=600;
+  let sx=0,sy=0,st=0,tracking=false,fromEdge=false,fromSide=false;
+  function onStart(e){
+    if(window.innerWidth>1024)return;
+    if(!e.touches||e.touches.length!==1)return;
+    const t=e.touches[0];
+    sx=t.clientX;sy=t.clientY;st=Date.now();
+    fromEdge=(sx<=EDGE_PX&&!side.classList.contains('open'));
+    fromSide=side.classList.contains('open');
+    tracking=fromEdge||fromSide;
+  }
+  function onEnd(e){
+    if(!tracking)return;
+    tracking=false;
+    const t=(e.changedTouches&&e.changedTouches[0])||null;
+    if(!t)return;
+    const dx=t.clientX-sx,dy=t.clientY-sy,dur=Date.now()-st;
+    if(dur>MAX_DURATION)return;
+    if(Math.abs(dy)>Math.abs(dx)*MAX_DY_RATIO)return;
+    if(fromEdge&&dx>MIN_DX)openSide();
+    else if(fromSide&&dx<-MIN_DX)closeSide();
+  }
+  document.addEventListener('touchstart',onStart,{passive:true});
+  document.addEventListener('touchend',onEnd,{passive:true});
+  document.addEventListener('touchcancel',()=>{tracking=false},{passive:true});
+})();
+
 // ── Logo click → go home ─────────────────────────────
 document.querySelector('.side-brand').addEventListener('click',function(){
   if(typeof TTS!=='undefined')TTS.stop();
@@ -1970,7 +2059,39 @@ const editNoteCancel=$('editNoteCancel');
 let _annActData=null; // {quote, note, date} for current action
 let _editingQuote=null; // preserved quote for edit modal
 
-function hideAnnActions(){annActions.classList.remove('vis');_annActData=null;}
+function hideAnnActions(){
+  annActions.classList.remove('vis');
+  _annActData=null;
+  // On touch devices the tooltip stays "stuck" via sticky-hover; clear it here too.
+  if(_isMobileDevice)annTooltip.classList.remove('vis');
+}
+
+// Shared tooltip renderer — used by mouseover (desktop) and click (mobile).
+function showAnnTooltipForMark(mark){
+  const dataStr=mark.getAttribute('data-ann');
+  if(!dataStr)return;
+  try{
+    const data=JSON.parse(decodeURIComponent(dataStr));
+    let html='';
+    if(data.note)html+='<div class="ann-tt-note">'+h(data.note)+'</div>';
+    html+='<div class="ann-tt-date">'+(data.note?'📝 ':'🖍️ ')+(h(data.date||'划线'))+'</div>';
+    annTooltip.innerHTML=html;
+    const rect=mark.getBoundingClientRect();
+    annTooltip.style.left=(rect.left+rect.width/2)+'px';
+    annTooltip.style.top=(rect.top-8)+'px';
+    annTooltip.style.transform='translateX(-50%) translateY(-100%)';
+    annTooltip.classList.add('vis');
+    requestAnimationFrame(()=>{
+      const ttRect=annTooltip.getBoundingClientRect();
+      if(ttRect.top<4){
+        annTooltip.style.top=(rect.bottom+8)+'px';
+        annTooltip.style.transform='translateX(-50%) translateY(0)';
+      }
+      if(ttRect.left<4)annTooltip.style.left=(4+ttRect.width/2)+'px';
+      if(ttRect.right>window.innerWidth-4)annTooltip.style.left=(window.innerWidth-4-ttRect.width/2)+'px';
+    });
+  }catch(ex){}
+}
 
 // Click on annotation marks → show actions panel
 document.addEventListener('click',function(e){
@@ -1982,7 +2103,14 @@ document.addEventListener('click',function(e){
   }
   e.preventDefault();
   e.stopPropagation();
-  annTooltip.classList.remove('vis'); // hide tooltip
+  // Desktop: tooltip already on via :hover, hide so actions panel is the focus.
+  // Mobile: hover never fired reliably — show tooltip alongside actions so the
+  // note text is actually visible (the actions panel only has 编辑/删除 buttons).
+  if(_isMobileDevice){
+    showAnnTooltipForMark(mark);
+  }else{
+    annTooltip.classList.remove('vis');
+  }
   const dataStr=mark.getAttribute('data-ann');
   if(!dataStr){hideAnnActions();return;}
   try{

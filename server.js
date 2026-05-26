@@ -24,6 +24,7 @@ const PYTHON = '/usr/bin/python3';
 const TTS_CACHE = '/tmp/obsidian-reader-tts';
 const TTS_VOICE = 'zh-CN-XiaoxiaoNeural';
 const SECRET_PATH = path.join(DIR, '.session-secret');
+const READ_STATE_PATH = path.join(DIR, 'read-articles.json');
 const TTS_MAX_TEXT_BYTES = 100 * 1024; // edge-tts argv safety, ~100KB
 const SSE_MAX_PER_IP = 5;
 const AUTH_RATE_WINDOW_MS = 60 * 1000;
@@ -43,6 +44,31 @@ function saveConfig(cfg) {
 }
 
 let config = loadConfig();
+
+// ── Read state (cross-device persistence for "已读" marks) ──
+// Single-process server, so an in-memory Set + write-through to JSON is enough.
+let _readState = null; // Set<string>
+function _loadReadState() {
+  try {
+    const raw = fs.readFileSync(READ_STATE_PATH, 'utf-8');
+    const obj = JSON.parse(raw);
+    const arr = Array.isArray(obj) ? obj : (Array.isArray(obj.articles) ? obj.articles : []);
+    _readState = new Set(arr.filter(x => typeof x === 'string'));
+  } catch {
+    _readState = new Set();
+  }
+}
+function _persistReadState() {
+  const arr = [..._readState].sort();
+  const tmp = READ_STATE_PATH + '.tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ articles: arr }, null, 0) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, READ_STATE_PATH);
+  } catch (e) {
+    console.warn('[read-state] persist failed:', e.message);
+  }
+}
+_loadReadState();
 
 // ── Auth ─────────────────────────────────────────────
 // HMAC-based stateless tokens: token = base64url(uid).base64url(hmac(uid))
@@ -183,6 +209,7 @@ const MIME = {
   '.gif':  'image/gif',
   '.webp': 'image/webp',
   '.svg':  'image/svg+xml',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.mp3':  'audio/mpeg',
   '.wav':  'audio/wav',
   '.ogg':  'audio/ogg',
@@ -362,7 +389,10 @@ const server = http.createServer(async (req, res) => {
     pathname === '/api/transcribe' ||
     pathname === '/api/transcribe/status' ||
     pathname === '/api/align' ||
-    pathname === '/api/events';
+    pathname === '/api/events' ||
+    pathname === '/api/read-state' ||
+    pathname === '/api/read-state/add' ||
+    pathname === '/api/read-state/remove';
 
   if (isProtectedPath && !isAuthed(req)) {
     jsonReply(res, 401, { error: 'Unauthorized' });
@@ -783,6 +813,51 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.error('[notes] error:', e.message);
       jsonReply(res, 500, { ok: false, error: 'Failed to read notes: ' + e.message });
+    }
+    return;
+  }
+
+  // /api/read-state — GET full set of read article ids
+  if (pathname === '/api/read-state' && req.method === 'GET') {
+    jsonReply(res, 200, { ok: true, articles: [..._readState] });
+    return;
+  }
+
+  // /api/read-state/add — POST { id } or { ids: [...] }
+  if (pathname === '/api/read-state/add' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const data = JSON.parse(body);
+      const ids = Array.isArray(data.ids) ? data.ids : (data.id ? [data.id] : []);
+      let changed = 0;
+      for (const id of ids) {
+        if (typeof id === 'string' && id && !_readState.has(id)) {
+          _readState.add(id);
+          changed++;
+        }
+      }
+      if (changed) _persistReadState();
+      jsonReply(res, 200, { ok: true, added: changed, total: _readState.size });
+    } catch {
+      jsonReply(res, 400, { ok: false, error: 'Bad request' });
+    }
+    return;
+  }
+
+  // /api/read-state/remove — POST { id } or { ids: [...] }
+  if (pathname === '/api/read-state/remove' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const data = JSON.parse(body);
+      const ids = Array.isArray(data.ids) ? data.ids : (data.id ? [data.id] : []);
+      let changed = 0;
+      for (const id of ids) {
+        if (typeof id === 'string' && _readState.delete(id)) changed++;
+      }
+      if (changed) _persistReadState();
+      jsonReply(res, 200, { ok: true, removed: changed, total: _readState.size });
+    } catch {
+      jsonReply(res, 400, { ok: false, error: 'Bad request' });
     }
     return;
   }
