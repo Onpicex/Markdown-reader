@@ -63,7 +63,7 @@ html{overflow-x:hidden}
 .side-hd{padding:20px 16px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
 .side-brand{display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer}
 .side-brand h1{font-size:15px;font-weight:700;color:var(--text-title);letter-spacing:.3px}
-.side-brand .ico{font-size:20px}
+.side-brand .ico{width:24px;height:24px;border-radius:4px;object-fit:cover}
 .sbox{position:relative}
 .sbox input{width:100%;padding:7px 10px 7px 32px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color var(--tr)}
 .sbox input:focus{border-color:var(--gold)}
@@ -173,7 +173,7 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 
 /* ── Welcome ─────────────────────────────────────────── */
 .welcome{max-width:460px;margin:100px auto;text-align:center;padding:0 24px}
-.welcome .ico{font-size:44px;margin-bottom:14px}
+.welcome .ico{margin-bottom:14px}.welcome .ico img{width:64px;height:64px;border-radius:12px}
 .welcome h2{font-size:20px;font-weight:700;margin-bottom:10px;color:var(--text-title)}
 .welcome p{font-size:14px;color:var(--text-3);line-height:1.6}
 .welcome .stats{margin-top:24px;display:flex;justify-content:center;gap:28px;flex-wrap:wrap}
@@ -484,7 +484,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
 <div class="app" id="app" style="display:none">
   <aside class="side" id="side">
     <div class="side-hd">
-      <div class="side-brand"><span class="ico">📖</span><h1>知识库阅读器</h1></div>
+      <div class="side-brand"><img class="ico" src="/icon-192.png" alt="logo" style="width:24px;height:24px;border-radius:4px"><h1>知识库阅读器</h1></div>
       <div class="sbox"><span class="si">🔍</span><input type="text" id="search" placeholder="搜索文章..." autocomplete="off"></div>
     </div>
     <nav class="side-nav" id="snav"><div class="ld"><div class="sp"></div><div>加载目录中...</div></div></nav>
@@ -523,7 +523,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
     </div>
     <div class="content" id="ct">
       <div class="welcome" id="wc">
-        <div class="ico">📖</div>
+        <div class="ico"><img src="/icon-192.png" alt="logo"></div>
         <h2>知识库阅读器</h2>
         <p>你的个人知识库，沉浸式阅读体验。<br>从左侧选择一篇文章开始阅读。</p>
         <div class="stats" id="ws"></div>
@@ -1584,7 +1584,7 @@ document.querySelector('.side-brand').addEventListener('click',function(){
   location.hash='';
   bc.innerHTML='';
   document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
-  ct.innerHTML='<div class="welcome" id="wc"><div class="ico">📖</div><h2>知识库阅读器</h2><p>你的个人知识库，沉浸式阅读体验。<br>从左侧选择一篇文章开始阅读。</p><div class="stats" id="ws"></div></div>';
+  ct.innerHTML='<div class="welcome" id="wc"><div class="ico"><img src="/icon-192.png" alt="logo"></div><h2>知识库阅读器</h2><p>你的个人知识库，沉浸式阅读体验。<br>从左侧选择一篇文章开始阅读。</p><div class="stats" id="ws"></div></div>';
   if(C){document.getElementById('ws').innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';}
   closeSide();
 });
@@ -3755,7 +3755,7 @@ async function enterEditMode(){
     return;
   }
   editMode=true;
-  editToggle.textContent='📖';
+  editToggle.innerHTML='<img src="/icon-192.png" alt="阅读" style="width:16px;height:16px;border-radius:3px;vertical-align:middle">';
   editToggle.title='阅读';
   editToggle.classList.add('active');
   // Replace content with editor
