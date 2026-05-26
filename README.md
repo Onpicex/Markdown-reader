@@ -8,10 +8,11 @@ Markdown 知识库阅读器,直接映射 Obsidian Vault 的目录结构和内容
 
 - 📖 **零构建延迟** - Obsidian 里改文章,刷新页面即见最新
 - 🔍 **全局搜索** - 侧边栏搜索框,键盘 `/` 快捷聚焦
-- ✅ **已读/未读** - 手动标记,状态存 localStorage
+- ✅ **已读/未读 + 跨设备同步** - 手动标记,服务端持久化 + 多设备自动合并同步
 - 🔒 **访问密码** - Cookie 认证保持一年,可通过网页修改密码
 - 🎨 **三主题切换** - 浅色/暗色/护眼三种阅读主题
-- 📱 **响应式设计** - 三断点适配(桌面 / 平板 / 手机)
+- 📱 **响应式设计** - 三断点适配(桌面 / 平板 / 手机),移动端深度优化(safe-area / 滑动手势 / sticky 工具栏)
+- 📲 **PWA 支持** - 添加到主屏幕即获独立 App 体验,支持 iOS / Android
 - 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `http://your-host.example:8765`,Web 版保持不变
 - 🎨 **书摘分享** - 选中文字生成精美书摘卡片,4 种风格可选,支持保存 PNG
 - 🎧 **TTS 听书** - Edge TTS 高品质语音朗读,实时段落高亮跟读,支持倍速调节,点击高亮段落可暂停/继续
@@ -90,6 +91,9 @@ pip install sentence-transformers  # 可选,语义对齐
 | Wiki Link 跳转 | 前端路由 |
 | 热扫描 + SSE 推送 | fs.watch + Python scanner |
 | 密码认证 | Cookie session |
+| 已读跨设备同步 | 服务端 JSON + union-merge |
+| PWA | manifest + Service Worker |
+| 移动端手势 | 原生 touch events |
 
 ### 💰 消耗 AI Token 的功能
 
@@ -121,6 +125,9 @@ pip install sentence-transformers  # 可选,语义对齐
               ├── /api/transcribe → POST 发起音频转录
               ├── /api/transcribe/status → POST 查询转录进度
               ├── /api/align     → POST 语义 Embedding 对齐(自动缓存)
+              ├── /api/read-state → GET 获取全量已读列表
+              ├── /api/read-state/add → POST 批量标记已读
+              ├── /api/read-state/remove → POST 批量取消已读
               └── /api/events    → SSE 实时目录更新推送(需鉴权,单 IP ≤5 连接,30s 心跳)
 ```
 
