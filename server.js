@@ -45,24 +45,72 @@ function saveConfig(cfg) {
 
 let config = loadConfig();
 
-// ── Read state (cross-device persistence for "已读" marks) ──
-// Single-process server, so an in-memory Set + write-through to JSON is enough.
-let _readState = null; // Set<string>
+// Alignment cache version — single source of truth shared with align.py via
+// align-version.json. Bump it there; both sides pick it up (no more dual
+// hard-coded literals drifting out of sync).
+function loadAlignVersion() {
+  try { return Number(JSON.parse(fs.readFileSync(path.join(DIR, 'align-version.json'), 'utf-8')).version) || 14; }
+  catch { return 14; }
+}
+const ALIGN_VERSION = loadAlignVersion();
+
+// Path-containment check that respects directory boundaries. A bare
+// `child.startsWith(base)` is wrong: "/x/vault-backup" startsWith "/x/vault"
+// is true but it's a *sibling*, not inside. Require an exact match or a
+// trailing separator so sibling dirs sharing a name prefix can't be escaped to.
+function isInside(base, target) {
+  const b = path.resolve(base);
+  const t = path.resolve(target);
+  return t === b || t.startsWith(b + path.sep);
+}
+
+// ── Read state (cross-device, per-id last-write-wins) ──
+// Single-process server. Two maps:
+//   _reads:      Map<id, ts>  when the article was marked read
+//   _tombstones: Map<id, ts>  when it was unmarked
+// An id is "read" iff it's in _reads and its ts >= any tombstone ts. The
+// tombstones are what let a peer's *unmark* survive a stale peer that still
+// has the id locally (the old union-merge could only ever re-add, so unmarks
+// resurrected across devices).
+let _reads = new Map();
+let _tombstones = new Map();
+const _TOMBSTONE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+function _isRead(id) {
+  const r = _reads.get(id);
+  if (r === undefined) return false;
+  const t = _tombstones.get(id);
+  return t === undefined || r >= t;
+}
+function _readList() {
+  const out = [];
+  for (const id of _reads.keys()) if (_isRead(id)) out.push(id);
+  return out.sort();
+}
 function _loadReadState() {
+  _reads = new Map();
+  _tombstones = new Map();
   try {
-    const raw = fs.readFileSync(READ_STATE_PATH, 'utf-8');
-    const obj = JSON.parse(raw);
-    const arr = Array.isArray(obj) ? obj : (Array.isArray(obj.articles) ? obj.articles : []);
-    _readState = new Set(arr.filter(x => typeof x === 'string'));
-  } catch {
-    _readState = new Set();
-  }
+    const obj = JSON.parse(fs.readFileSync(READ_STATE_PATH, 'utf-8'));
+    if (Array.isArray(obj)) {
+      for (const id of obj) if (typeof id === 'string') _reads.set(id, 0);
+    } else if (obj && typeof obj === 'object') {
+      const arts = obj.articles;
+      if (Array.isArray(arts)) { for (const id of arts) if (typeof id === 'string') _reads.set(id, 0); }
+      else if (arts && typeof arts === 'object') { for (const [id, ts] of Object.entries(arts)) _reads.set(id, Number(ts) || 0); }
+      if (obj.reads && typeof obj.reads === 'object') for (const [id, ts] of Object.entries(obj.reads)) _reads.set(id, Number(ts) || 0);
+      if (obj.tombstones && typeof obj.tombstones === 'object') for (const [id, ts] of Object.entries(obj.tombstones)) _tombstones.set(id, Number(ts) || 0);
+    }
+  } catch {}
 }
 function _persistReadState() {
-  const arr = [..._readState].sort();
+  const cutoff = Date.now() - _TOMBSTONE_TTL_MS;
+  for (const [id, ts] of _tombstones) if (ts && ts < cutoff) _tombstones.delete(id);
+  const reads = {}, tombs = {};
+  for (const [id, ts] of _reads) reads[id] = ts;
+  for (const [id, ts] of _tombstones) tombs[id] = ts;
   const tmp = READ_STATE_PATH + '.tmp';
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ articles: arr }, null, 0) + '\n', { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify({ articles: _readList(), reads, tombstones: tombs }, null, 0) + '\n', { mode: 0o600 });
     fs.renameSync(tmp, READ_STATE_PATH);
   } catch (e) {
     console.warn('[read-state] persist failed:', e.message);
@@ -163,9 +211,8 @@ function invalidateBasenameIndex() { _basenameIndex = null; }
 // Returns absolute path (within vault) if found, else null.
 function resolveVaultPath(rel) {
   if (!rel || !config.vault) return null;
-  const vaultAbs = path.resolve(config.vault);
   const direct = path.resolve(config.vault, rel);
-  if (!direct.startsWith(vaultAbs)) return null;
+  if (!isInside(config.vault, direct)) return null;
   if (fs.existsSync(direct)) return direct;
   // Fallback: only for bare filenames (no '/'), look up by basename
   if (rel.includes('/')) return null;
@@ -306,11 +353,23 @@ function jsonReply(res, code, obj) {
   res.end(body);
 }
 
-function readBody(req) {
+// Read a request body with a hard size cap so an (authenticated) client can't
+// OOM the single-process server with an unbounded upload. On overflow we stop
+// buffering and resolve a sentinel; callers JSON.parse it, which throws and is
+// already handled as a 400/500 in every handler.
+const MAX_BODY_BYTES = 4 * 1024 * 1024; // 4MB — generous for article edits
+function readBody(req, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve) => {
     const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    let size = 0, aborted = false;
+    req.on('data', c => {
+      if (aborted) return;
+      size += c.length;
+      if (size > maxBytes) { aborted = true; chunks.length = 0; resolve('__BODY_TOO_LARGE__'); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => { if (!aborted) resolve(Buffer.concat(chunks).toString('utf-8')); });
+    req.on('error', () => { if (!aborted) resolve(''); });
   });
 }
 
@@ -439,7 +498,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith('/tts-cache/')) {
     const rel = pathname.slice(11);
     const resolved = path.resolve(TTS_CACHE, rel);
-    if (!resolved.startsWith(path.resolve(TTS_CACHE))) {
+    if (!isInside(TTS_CACHE, resolved)) {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
@@ -563,7 +622,7 @@ const server = http.createServer(async (req, res) => {
       }
       // Resolve article directory
       const articlePath = path.resolve(config.vault, articleId);
-      if (!articlePath.startsWith(path.resolve(config.vault))) {
+      if (!isInside(config.vault, articlePath)) {
         jsonReply(res, 403, { ok: false, error: 'Forbidden' });
         return;
       }
@@ -626,7 +685,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const articlePath = path.resolve(config.vault, articleId);
-      if (!articlePath.startsWith(path.resolve(config.vault))) {
+      if (!isInside(config.vault, articlePath)) {
         jsonReply(res, 403, { ok: false, error: 'Forbidden' });
         return;
       }
@@ -704,7 +763,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const articlePath = path.resolve(config.vault, articleId);
-      if (!articlePath.startsWith(path.resolve(config.vault))) {
+      if (!isInside(config.vault, articlePath)) {
         jsonReply(res, 403, { ok: false, error: 'Forbidden' });
         return;
       }
@@ -795,7 +854,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const articlePath = path.resolve(config.vault, articleId);
-    if (!articlePath.startsWith(path.resolve(config.vault))) {
+    if (!isInside(config.vault, articlePath)) {
       jsonReply(res, 403, { ok: false, error: 'Forbidden' });
       return;
     }
@@ -817,45 +876,49 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /api/read-state — GET full set of read article ids
+  // /api/read-state — GET read ids + per-id timestamps + tombstones (for LWW merge)
   if (pathname === '/api/read-state' && req.method === 'GET') {
-    jsonReply(res, 200, { ok: true, articles: [..._readState] });
+    const reads = {}, tombs = {};
+    for (const [id, ts] of _reads) reads[id] = ts;
+    for (const [id, ts] of _tombstones) tombs[id] = ts;
+    jsonReply(res, 200, { ok: true, articles: _readList(), reads, tombstones: tombs });
     return;
   }
 
-  // /api/read-state/add — POST { id } or { ids: [...] }
+  // /api/read-state/add — POST { id|ids, ts? }  (mark read; LWW by ts)
   if (pathname === '/api/read-state/add' && req.method === 'POST') {
     const body = await readBody(req);
     try {
       const data = JSON.parse(body);
       const ids = Array.isArray(data.ids) ? data.ids : (data.id ? [data.id] : []);
+      const ts = Number(data.ts) || Date.now();
       let changed = 0;
       for (const id of ids) {
-        if (typeof id === 'string' && id && !_readState.has(id)) {
-          _readState.add(id);
-          changed++;
-        }
+        if (typeof id !== 'string' || !id) continue;
+        if (ts >= (_reads.get(id) || 0)) { _reads.set(id, ts); changed++; }
       }
       if (changed) _persistReadState();
-      jsonReply(res, 200, { ok: true, added: changed, total: _readState.size });
+      jsonReply(res, 200, { ok: true, added: changed, total: _readList().length });
     } catch {
       jsonReply(res, 400, { ok: false, error: 'Bad request' });
     }
     return;
   }
 
-  // /api/read-state/remove — POST { id } or { ids: [...] }
+  // /api/read-state/remove — POST { id|ids, ts? }  (tombstone unmark; LWW by ts)
   if (pathname === '/api/read-state/remove' && req.method === 'POST') {
     const body = await readBody(req);
     try {
       const data = JSON.parse(body);
       const ids = Array.isArray(data.ids) ? data.ids : (data.id ? [data.id] : []);
+      const ts = Number(data.ts) || Date.now();
       let changed = 0;
       for (const id of ids) {
-        if (typeof id === 'string' && _readState.delete(id)) changed++;
+        if (typeof id !== 'string' || !id) continue;
+        if (ts >= (_tombstones.get(id) || 0)) { _tombstones.set(id, ts); changed++; }
       }
       if (changed) _persistReadState();
-      jsonReply(res, 200, { ok: true, removed: changed, total: _readState.size });
+      jsonReply(res, 200, { ok: true, removed: changed, total: _readList().length });
     } catch {
       jsonReply(res, 400, { ok: false, error: 'Bad request' });
     }
@@ -999,7 +1062,7 @@ const server = http.createServer(async (req, res) => {
       }
       const articleResolved = path.resolve(config.vault, articleId);
       const vttResolved = resolveVaultPath(vttPath);
-      if (!articleResolved.startsWith(path.resolve(config.vault))) {
+      if (!isInside(config.vault, articleResolved)) {
         jsonReply(res, 403, { ok: false, error: 'Forbidden' });
         return;
       }
@@ -1021,7 +1084,6 @@ const server = http.createServer(async (req, res) => {
             //  (1) version mismatch (align.py logic changed) → regenerate
             //  (2) low quality (<50% of segments hit by any cue) → regenerate
             const st = cached.stats || {};
-            const ALIGN_VERSION = 13;
             const cachedVer = st.version || 0;
             // Bonus credit for segments that don't appear in audio (footnotes,
             // 划重点 summary lists) — they correctly stay unmapped. Without
@@ -1041,6 +1103,14 @@ const server = http.createServer(async (req, res) => {
             const hitRatio = (st.segsHit || 0) / effSegments;
             if (cachedVer !== ALIGN_VERSION) {
               console.log(`[align] cache version=${cachedVer} (current=${ALIGN_VERSION}), regenerating: ${cachePath}`);
+            } else if (!st.segments || !st.cues) {
+              // Legitimately empty article or empty VTT (nothing to align) —
+              // version matches, so accept the empty map instead of pointlessly
+              // regenerating it (and re-spawning python) on every request. The
+              // hitRatio heuristic below is only meaningful when cues exist.
+              cached.cached = true;
+              jsonReply(res, 200, { ok: true, ...cached });
+              return;
             } else if (hitRatio < 0.7) {
               console.log(`[align] cache low-quality (segsHit=${st.segsHit}/${effSegments} eff, ratio=${hitRatio.toFixed(2)}), regenerating: ${cachePath}`);
             } else {
@@ -1089,7 +1159,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith('/data/')) {
     const rel = pathname.slice(6);
     const resolved = path.resolve(DIST, 'data', rel);
-    if (!resolved.startsWith(path.resolve(DIST, 'data'))) {
+    if (!isInside(path.join(DIST, 'data'), resolved)) {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
@@ -1113,7 +1183,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith('/vault/')) {
     const rel = pathname.slice(7);
     const directResolved = path.resolve(config.vault, rel);
-    if (!directResolved.startsWith(path.resolve(config.vault))) {
+    if (!isInside(config.vault, directResolved)) {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
@@ -1162,8 +1232,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /api/rescan → regenerate catalog
-  if (pathname === '/api/rescan') {
+  // /api/rescan → regenerate catalog (POST only: it has a side effect + spawns
+  // a process, so it must not be triggerable by a GET/prefetch)
+  if (pathname === '/api/rescan' && req.method === 'POST') {
     execFile(PYTHON, [path.join(DIR, 'scan.py')], { timeout: 30000 }, (err, stdout, stderr) => {
       const ok = !err;
       if (ok) {
@@ -1255,7 +1326,7 @@ const server = http.createServer(async (req, res) => {
   // Everything else → serve from dist/
   let filepath = path.join(DIST, pathname === '/' ? 'index.html' : pathname);
   const resolved = path.resolve(filepath);
-  if (!resolved.startsWith(path.resolve(DIST))) {
+  if (!isInside(DIST, resolved)) {
     res.writeHead(403); res.end('Forbidden');
     return;
   }
@@ -1269,7 +1340,10 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
-    serveFile(res, resolved, 'max-age=3600');
+    // sw.js / manifest must not be pinned in the HTTP cache, or service-worker
+    // updates (and the shell precache list) would lag by up to an hour.
+    const cc = /(?:^|\/)(sw\.js|manifest\.webmanifest)$/.test(resolved) ? 'no-cache' : 'max-age=3600';
+    serveFile(res, resolved, cc);
   });
 });
 

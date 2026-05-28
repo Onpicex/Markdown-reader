@@ -15,14 +15,15 @@ from typing import Optional, List, Tuple
 try:
     import yaml
 except ImportError:
-    import subprocess
-    print("Installing pyyaml package...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "pyyaml"])
-    except subprocess.CalledProcessError as e:
-        print(f"❌ pip install failed: {e}. Run manually: {sys.executable} -m pip install --user pyyaml", file=sys.stderr)
-        sys.exit(1)
-    import yaml
+    # Do NOT auto-install at import time: the server calls this with a 30s
+    # timeout, a network pip install can blow that budget and leave a
+    # half-installed state. Fail fast and let the deploy env pre-install it.
+    print(
+        f"❌ Missing dependency 'pyyaml'. Install it once: "
+        f"{sys.executable} -m pip install --user pyyaml",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
@@ -86,9 +87,11 @@ def extract_title(meta: dict, body: str, filename: str) -> str:
     """Extract title from frontmatter, first heading, or filename.
     If filename starts with a number prefix (e.g. 001_xxx.md),
     the prefix is prepended to the title for ordering."""
-    # Detect numeric prefix in filename: 001_xxx.md → prefix="001"
+    # Detect numeric prefix in filename: 001_xxx.md → prefix="001".
+    # Accept common separators incl. fullwidth space and CJK bars/dots so
+    # platform-style names ("19.0726丨03 ...", "001、xxx") still order correctly.
     name = filename.replace('.md', '')
-    prefix_match = re.match(r'^(\d+)[_\s]', name)
+    prefix_match = re.match(r'^(\d+)[_.\s　丨．、|]', name)
     prefix = prefix_match.group(1) if prefix_match else None
 
     # Get base title from frontmatter or H1
@@ -106,10 +109,12 @@ def extract_title(meta: dict, body: str, filename: str) -> str:
             title = f"{prefix} {title}"
         return title
 
-    # Fallback: use filename
-    if '-' in name and name.count('-') == 1:
+    # Fallback: use filename. Only strip a trailing "-author" slug when the
+    # name looks like a slug (single hyphen, no spaces) — avoids mangling real
+    # titles that legitimately contain a spaced hyphen ("初段 - 闭环").
+    if '-' in name and name.count('-') == 1 and ' ' not in name:
         parts = name.rsplit('-', 1)
-        if len(parts[1]) < 20 and not re.search(r'\d', parts[1]):
+        if 0 < len(parts[1]) < 20 and not re.search(r'\d', parts[1]):
             return parts[0]
     return name
 

@@ -622,59 +622,97 @@ const side=$('side'),ov=$('ov'),snav=$('snav'),sft=$('sft'),search=$('search'),
 const modalBg=$('modalBg'),cfgVault=$('cfgVault'),cfgCancel=$('cfgCancel'),cfgSave=$('cfgSave');
 const pwOld=$('pwOld'),pwNew=$('pwNew'),pwConfirm=$('pwConfirm'),pwSave=$('pwSave'),pwMsg=$('pwMsg');
 
-// ── Read state (localStorage) ────────────────────────
-// Cache the Set in memory so the entire JSON isn't re-parsed on every isRead()
-// (called per-article in renderSidebar — used to be O(n) parse per render).
-let _readSetCache = null;
-function getReadSet(){
-  if(_readSetCache) return _readSetCache;
-  try{ _readSetCache = new Set(JSON.parse(localStorage.getItem('readArticles')||'[]')); }
-  catch(e){ _readSetCache = new Set(); }
-  return _readSetCache;
+// ── Read state (per-id last-write-wins + tombstones) ──
+// Mirrors the server model so cross-device unmark actually sticks. The old
+// union-merge could only ever re-add ids, so an unmark on device A was
+// resurrected by any stale peer B that still had the id locally.
+//   _reads:  Map<id, ts>  when marked read
+//   _tombs:  Map<id, ts>  when unmarked
+// An id is "read" iff in _reads and its ts >= any tombstone ts. Maps are loaded
+// once and cached (isRead is called per-article in renderSidebar).
+let _reads=null, _tombs=null;
+function _loadReadState(){
+  if(_reads) return;
+  _reads=new Map(); _tombs=new Map();
+  try{
+    const raw=localStorage.getItem('readState');
+    if(raw){
+      const o=JSON.parse(raw)||{};
+      if(o.reads) for(const k in o.reads) _reads.set(k, Number(o.reads[k])||0);
+      if(o.tombstones) for(const k in o.tombstones) _tombs.set(k, Number(o.tombstones[k])||0);
+    }else{
+      // Migrate legacy flat array (readArticles) → reads with ts=0.
+      const old=JSON.parse(localStorage.getItem('readArticles')||'[]');
+      if(Array.isArray(old)) for(const id of old) if(typeof id==='string') _reads.set(id,0);
+    }
+  }catch(e){ _reads=new Map(); _tombs=new Map(); }
 }
-function saveReadSet(s){
-  _readSetCache = s;
-  try{ localStorage.setItem('readArticles',JSON.stringify([...s])); }
-  catch(e){ console.warn('readArticles save failed (quota?):', e); }
+function _saveReadState(){
+  _loadReadState();
+  try{
+    const reads={},tombs={};
+    for(const [k,v] of _reads) reads[k]=v;
+    for(const [k,v] of _tombs) tombs[k]=v;
+    localStorage.setItem('readState',JSON.stringify({reads,tombstones:tombs}));
+  }catch(e){ console.warn('readState save failed (quota?):', e); }
+}
+function isRead(id){
+  _loadReadState();
+  const r=_reads.get(id);
+  if(r===undefined) return false;
+  const t=_tombs.get(id);
+  return t===undefined || r>=t;
+}
+// Derived Set of currently-read ids (callers use .has()/iteration).
+function getReadSet(){
+  _loadReadState();
+  const s=new Set();
+  for(const id of _reads.keys()) if(isRead(id)) s.add(id);
+  return s;
 }
 function markRead(id){
-  const s=getReadSet(); s.add(id); saveReadSet(s);
-  _pushReadState('add',id);
+  _loadReadState();
+  const ts=Date.now();
+  if(ts>=(_reads.get(id)||0)) _reads.set(id,ts);
+  _saveReadState();
+  _pushReadState('add',id,ts);
 }
 function unmarkRead(id){
-  const s=getReadSet(); s.delete(id); saveReadSet(s);
-  _pushReadState('remove',id);
+  _loadReadState();
+  const ts=Date.now();
+  if(ts>=(_tombs.get(id)||0)) _tombs.set(id,ts);
+  _saveReadState();
+  _pushReadState('remove',id,ts);
 }
-// Fire-and-forget POST to keep server in sync. Failures are logged, not retried —
-// next syncReadState() on app load will reconcile via union merge.
-function _pushReadState(action,id){
+// Fire-and-forget POST (with the action's ts) to keep server in sync. Failures
+// are logged, not retried — next syncReadState() reconciles via LWW.
+function _pushReadState(action,id,ts){
   fetch('/api/read-state/'+action,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id})
+    body:JSON.stringify({id,ts})
   }).catch(e=>console.warn('[read-state] '+action+' failed:',e));
 }
-// Initial sync: pull server set, union-merge with local, push any local-only ids back.
-// Called from init() after catalog is available so we can re-render the sidebar.
+// Initial sync: pull server reads+tombstones, merge per-id LWW both ways, push
+// any locally-newer entries back. Called from init() after catalog is available.
 async function syncReadState(){
   try{
     const r=await fetch('/api/read-state',{cache:'no-store'});
     if(!r.ok)return false;
     const data=await r.json();
-    if(!data||!Array.isArray(data.articles))return false;
-    const serverSet=new Set(data.articles);
-    const localSet=getReadSet();
-    const localOnly=[...localSet].filter(x=>!serverSet.has(x));
-    const merged=new Set([...serverSet,...localSet]);
-    _readSetCache=merged;
-    try{localStorage.setItem('readArticles',JSON.stringify([...merged]));}catch(e){}
-    if(localOnly.length){
-      fetch('/api/read-state/add',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ids:localOnly})
-      }).catch(e=>console.warn('[read-state] migrate-push failed:',e));
-    }
+    if(!data||!data.ok)return false;
+    _loadReadState();
+    const sr=data.reads||{}, st=data.tombstones||{};
+    // server → local
+    for(const k in sr){ const v=Number(sr[k])||0; if(v>(_reads.get(k)||0)) _reads.set(k,v); }
+    for(const k in st){ const v=Number(st[k])||0; if(v>(_tombs.get(k)||0)) _tombs.set(k,v); }
+    // local newer than server → push back (each with its own ts)
+    const pushReads=[],pushTombs=[];
+    for(const [k,v] of _reads){ if(v>(Number(sr[k])||0)) pushReads.push(k); }
+    for(const [k,v] of _tombs){ if(v>(Number(st[k])||0)) pushTombs.push(k); }
+    _saveReadState();
+    pushReads.forEach(k=>_pushReadState('add',k,_reads.get(k)));
+    pushTombs.forEach(k=>_pushReadState('remove',k,_tombs.get(k)));
     return true;
   }catch(e){console.warn('[read-state] sync failed:',e);return false;}
 }
@@ -682,15 +720,14 @@ function toggleRead(id){
   if(isRead(id)){unmarkRead(id)}else{markRead(id)}
   updateReadUI(id);
 }
-function isRead(id){ return getReadSet().has(id); }
-// Drop ids that no longer exist in the catalog (renamed/deleted articles)
+// Drop ids that no longer exist in the catalog (renamed/deleted articles).
 function pruneReadSet(catalog){
   if(!catalog||!catalog.articles)return;
   const valid = new Set(catalog.articles.map(a=>a.id));
-  const cur = getReadSet();
+  _loadReadState();
   let removed = 0;
-  for(const id of [...cur]){ if(!valid.has(id)){ cur.delete(id); removed++; } }
-  if(removed){ saveReadSet(cur); console.log('[read] pruned',removed,'orphan ids'); }
+  for(const id of [..._reads.keys()]){ if(!valid.has(id)){ _reads.delete(id); _tombs.delete(id); removed++; } }
+  if(removed){ _saveReadState(); console.log('[read] pruned',removed,'orphan ids'); }
 }
 function updateReadUI(id){
   const rd=isRead(id);
@@ -969,16 +1006,24 @@ async function init(){
       // Also refresh any read-toggle button currently on screen.
       if(curId)updateReadUI(curId);
     }
-    // Load article from hash
-    const id=location.hash.slice(1);
-    if(id)loadArticle(decodeURIComponent(id));
-    // SSE: live catalog updates
+    // Load article from hash (supports deep link "#id?highlight=...")
+    const rawHash=location.hash.slice(1);
+    if(rawHash){
+      const qi=rawHash.indexOf('?');
+      const idPart=qi>=0?rawHash.slice(0,qi):rawHash;
+      let hl='';
+      if(qi>=0){ try{ hl=decodeURIComponent(new URLSearchParams(rawHash.slice(qi+1)).get('highlight')||''); }catch(e){} }
+      if(idPart)loadArticle(decodeURIComponent(idPart), hl);
+    }
+    // SSE: live catalog updates. Do NOT close() on error — EventSource
+    // auto-reconnects; closing it (even after a successful reconnect) would
+    // permanently kill live updates until a page reload.
     if(typeof EventSource!=='undefined'){
       const es=new EventSource('/api/events');
       es.onmessage=function(e){
         if(e.data==='catalog-updated') refreshCatalog();
       };
-      es.onerror=function(){ setTimeout(()=>{ try{es.close()}catch{} },5000); };
+      es.onerror=function(){ /* leave it to the browser's built-in reconnect */ };
     }
   }catch(e){snav.innerHTML='<div class="ld">加载失败</div>';console.error(e)}
 }
@@ -1062,11 +1107,6 @@ function renderSidebar(cat,filter){
   snav.innerHTML=out;
 }
 
-function artItem(a,sub,readSet){
-  const act=a.id===curId?' active':'';
-  const rd=readSet.has(a.id);
-  return '<div class="ai'+(sub?' sub':'')+(rd?' read':'')+act+'" data-id="'+ha(a.id)+'" title="'+ha(a.title)+'"><span class="at">'+h(a.title)+'</span>'+(rd?'<span class="rd">\u2713</span>':'')+'</div>';
-}
 
 // ── Get prev/next articles in same category ─────────
 function getNavSiblings(id){
@@ -1129,7 +1169,16 @@ function expandSidebarTo(key,type){
 }
 
 // ── Toggle checkbox in reading mode ─────────────────────
-async function toggleCheckbox(articleId,cbIndex,newChecked){
+// Serialize writes: each toggle is GET→modify Nth box→POST. Two concurrent
+// toggles would both read the same original and the later POST would clobber
+// the earlier one (lost update). Chain them so each GET sees the prior write.
+let _cbWriteChain=Promise.resolve();
+function toggleCheckbox(articleId,cbIndex,newChecked){
+  const run=_cbWriteChain.then(()=>_doToggleCheckbox(articleId,cbIndex,newChecked));
+  _cbWriteChain=run.catch(()=>{});
+  return run;
+}
+async function _doToggleCheckbox(articleId,cbIndex,newChecked){
   try{
     const r=await fetch('/vault/'+articleId.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
     if(!r.ok)throw new Error('fetch failed');
@@ -1157,8 +1206,8 @@ async function toggleCheckbox(articleId,cbIndex,newChecked){
 }
 
 // ── Load article (fetch raw markdown, render in browser) ─
-async function loadArticle(id){
-  if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];}
+async function loadArticle(id, highlightText){
+  if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];TTS._segTimeRanges=null;TTS._hlEl=null;}
   if(typeof InlineAudio!=='undefined'){for(const k of InlineAudio.active.keys())InlineAudio.deactivate(k);}
   ct.innerHTML='<div class="ld"><div class="sp"></div><div>加载中...</div></div>';
   try{
@@ -1265,9 +1314,10 @@ async function loadArticle(id){
       // Try to find the associated quote from a preceding blockquote
       const quoteText=findQuoteForWikiLink(this);
       if(quoteText){
-        const hlParam=encodeURIComponent(quoteText.slice(0,40));
-        location.hash=encodeURIComponent(targetId)+'?highlight='+hlParam;
-        loadArticle(targetId);
+        // Pass the highlight as an arg — routing it through location.hash used
+        // to fail because loadArticle() overwrites the hash with the bare id
+        // before reading the ?highlight= back out.
+        loadArticle(targetId, quoteText.slice(0,40));
       }else{
         loadArticle(targetId);
       }
@@ -1290,15 +1340,16 @@ async function loadArticle(id){
     }
     // Load annotations (highlights + notes from 笔记.md)
     loadAnnotations(id);
-    // Check for highlight jump parameter in hash
-    const hashParts=location.hash.split('?');
-    if(hashParts.length>1){
-      const params=new URLSearchParams(hashParts.slice(1).join('?'));
-      const hlText=params.get('highlight');
-      if(hlText){
-        setTimeout(()=>scrollToHighlight(decodeURIComponent(hlText)),500);
+    // Highlight jump: prefer the explicit arg (wiki-link nav / deep link);
+    // fall back to parsing the hash for any "#id?highlight=..." still present.
+    let hl=highlightText||'';
+    if(!hl){
+      const hashParts=location.hash.split('?');
+      if(hashParts.length>1){
+        try{ hl=decodeURIComponent(new URLSearchParams(hashParts.slice(1).join('?')).get('highlight')||''); }catch(e){}
       }
     }
+    if(hl){ setTimeout(()=>scrollToHighlight(hl),500); }
     closeSide();
   }catch(e){
     ct.innerHTML='<div class="ld">文章加载失败</div>';
@@ -1350,17 +1401,17 @@ snav.addEventListener('click',function(e){
 rescan.addEventListener('click',async function(){
   rescan.classList.add('spinning');
   try{
-    const r=await fetch('/api/rescan');
+    const r=await fetch('/api/rescan',{method:'POST'});
     const d=await r.json();
     if(d.ok){
       catalogEtag=''; // force full reload after rescan
       const freshData=await fetchCatalog();
       if(freshData)applyCatalog(freshData);
     }else{
-      alert('扫描失败: '+(d.stderr||d.error||'未知错误'));
+      showToast('扫描失败: '+(d.stderr||d.error||'未知错误'));
     }
   }catch(e){
-    alert('扫描请求失败');
+    showToast('扫描请求失败');
     console.error(e);
   }finally{
     rescan.classList.remove('spinning');
@@ -1446,7 +1497,7 @@ cfgCancel.addEventListener('click',()=>modalBg.classList.remove('on'));
 modalBg.addEventListener('click',e=>{if(e.target===modalBg)modalBg.classList.remove('on')});
 cfgSave.addEventListener('click',async function(){
   const vault=cfgVault.value.trim();
-  if(!vault){alert('路径不能为空');return;}
+  if(!vault){showToast('路径不能为空');return;}
   const ttsEnabled=cfgTts.checked;
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vault,ttsEnabled})});
@@ -1456,9 +1507,9 @@ cfgSave.addEventListener('click',async function(){
       modalBg.classList.remove('on');
       rescan.click();
     }else{
-      alert('保存失败: '+(d.error||''));
+      showToast('保存失败: '+(d.error||''));
     }
-  }catch(e){alert('请求失败');}
+  }catch(e){showToast('请求失败');}
 });
 
 // ── Password change ──────────────────────────────────────
@@ -1590,9 +1641,12 @@ document.querySelector('.side-brand').addEventListener('click',function(){
 });
 
 // ── Back to top ──────────────────────────────────────
+let _bttTick=false;
 ct.addEventListener('scroll',function(){
-  btt.classList.toggle('vis',ct.scrollTop>300);
-});
+  if(_bttTick)return;
+  _bttTick=true;
+  requestAnimationFrame(()=>{ btt.classList.toggle('vis',ct.scrollTop>300); _bttTick=false; });
+},{passive:true});
 btt.addEventListener('click',()=>ct.scrollTo({top:0,behavior:'smooth'}));
 
 // ── Keyboard shortcuts ──────────────────────────────
@@ -1605,8 +1659,12 @@ document.addEventListener('keydown',function(e){
 
 // ── Hash change ──────────────────────────────────────
 window.addEventListener('hashchange',function(){
-  const id=location.hash.slice(1);
-  if(id&&id!==curId)loadArticle(decodeURIComponent(id));
+  // Decode + strip any ?highlight= before comparing: location.hash is
+  // percent-encoded while curId is decoded, so a naive compare re-loaded the
+  // same article on every navigation (CJK ids never matched).
+  const raw=location.hash.slice(1);
+  const id=raw?decodeURIComponent(raw.split('?')[0]):'';
+  if(id&&id!==curId)loadArticle(id);
 });
 
 // ── Restore prefs ────────────────────────────────────
@@ -1674,10 +1732,15 @@ function debouncedShowShareBar(){
   clearTimeout(_shareDebounce);
   _shareDebounce=setTimeout(showShareBarIfSelected,350);
 }
-// Desktop: instant feedback via selectionchange (skip on touch devices during touch)
+// Desktop: instant feedback via selectionchange (skip on touch devices during
+// touch). Coalesce to one call per frame — selectionchange fires rapidly during
+// a drag-select and showShareBarIfSelected() reads layout (getBoundingClientRect).
+let _selTick=false;
 document.addEventListener('selectionchange',function(){
   if(_touchActive)return; // ignore during touch — wait for touchend
-  showShareBarIfSelected();
+  if(_selTick)return;
+  _selTick=true;
+  requestAnimationFrame(()=>{ _selTick=false; showShareBarIfSelected(); });
 });
 // Mobile: debounce after touch ends to let the selection finalize
 document.addEventListener('touchstart',function(){_touchActive=true;},{passive:true});
@@ -1692,7 +1755,7 @@ document.addEventListener('touchcancel',function(){
 },{passive:true});
 
 // Hide share bar on scroll
-ct.addEventListener('scroll',()=>{shareBar.classList.remove('vis');hideAnnActions();});
+ct.addEventListener('scroll',()=>{shareBar.classList.remove('vis');hideAnnActions();},{passive:true});
 
 // Theme switcher
 const shareThemes=$('shareThemes');
@@ -1819,7 +1882,7 @@ saSave.addEventListener('click',function(){
     console.error('html2canvas error',err);
     saSave.textContent='💾 保存图片';
     saSave.disabled=false;
-    alert('图片生成失败');
+    showToast('图片生成失败');
   });
 });
 
@@ -1933,6 +1996,7 @@ async function loadAnnotations(articleId){
   });
   try{
     const r=await fetch('/api/notes?articleId='+encodeURIComponent(articleId));
+    if(!r.ok)return;
     const d=await r.json();
     if(!d.ok||!d.notes||!d.notes.length)return;
     // For each note entry, find and wrap matching text
@@ -1962,20 +2026,28 @@ function highlightInBody(body,entry){
     textParts.push({node,start:fullText.length,end:fullText.length+node.textContent.length});
     fullText+=node.textContent;
   }
-  // Find quote in fullText (try exact match, then normalized)
+  // Find quote in fullText: exact first, then whitespace-normalized but with an
+  // index map back to the ORIGINAL string. (The old code reused the collapsed
+  // offset directly, mis-positioning the mark whenever the original had runs of
+  // whitespace before the match.)
   let matchStart=fullText.indexOf(quote);
+  let matchEnd=matchStart>=0?matchStart+quote.length:-1;
   if(matchStart<0){
-    // Try with normalized whitespace
-    const normFull=fullText.replace(/\s+/g,' ');
-    const normQuote=quote.replace(/\s+/g,' ');
-    const normPos=normFull.indexOf(normQuote);
+    let normFull='';const map=[];let prevSpace=false;
+    for(let i=0;i<fullText.length;i++){
+      const ch=fullText[i];
+      if(/\s/.test(ch)){ if(prevSpace)continue; normFull+=' ';map.push(i);prevSpace=true; }
+      else{ normFull+=ch;map.push(i);prevSpace=false; }
+    }
+    const normQuote=quote.replace(/\s+/g,' ').trim();
+    const normPos=normQuote?normFull.indexOf(normQuote):-1;
     if(normPos>=0){
-      // Map back to original positions (approximate)
-      matchStart=normPos;
+      matchStart=map[normPos];
+      const lastIdx=normPos+normQuote.length-1;
+      matchEnd=(map[lastIdx]!==undefined?map[lastIdx]:fullText.length-1)+1;
     }
   }
   if(matchStart<0)return;
-  const matchEnd=matchStart+quote.length;
   // Find which text nodes are involved
   const affectedNodes=[];
   for(const tp of textParts){
@@ -2116,9 +2188,8 @@ document.addEventListener('click',function(e){
   try{
     _annActData=JSON.parse(decodeURIComponent(dataStr));
   }catch(ex){hideAnnActions();return;}
-  const hasNote=!!_annActData.note;
-  // Show/hide edit button based on whether it's a note or just a highlight
-  annActEdit.style.display=hasNote?'flex':'flex'; // always show edit
+  // Edit button is always shown (works for both highlights and notes).
+  annActEdit.style.display='flex';
   // Position the panel near the click
   const rect=mark.getBoundingClientRect();
   let left=rect.left+rect.width/2;
@@ -2292,6 +2363,30 @@ const ttsPlay=$('ttsPlay'),ttsStop=$('ttsStop');
 const ttsProgress=$('ttsProgress'),ttsProgressFill=$('ttsProgressFill');
 const ttsInfo=$('ttsInfo'),ttsSpeedSel=$('ttsSpeed');
 
+// Single source of truth for splitting the rendered article into segments.
+// Used by BOTH whole-article TTS and inline-audio follow-along, and mirrored by
+// align.py's parse_segments — if these drift, the alignment count won't match
+// the DOM and the frontend silently falls back to LCS. Rules: skip .audio-embed
+// (UI chrome, not article text) and skip <p> directly inside <li> (marked's
+// loose-list rendering would otherwise duplicate the item's text).
+function collectArticleSegments(){
+  const out=[];
+  const body=document.querySelector('.art-body');
+  if(!body)return out;
+  const blocks=body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote > p, td, th');
+  const seen=new Set();
+  for(const el of blocks){
+    if(seen.has(el))continue;
+    seen.add(el);
+    if(el.closest('.audio-embed'))continue;
+    if(el.tagName==='P'&&el.parentElement&&el.parentElement.tagName==='LI')continue;
+    const text=el.innerText.trim();
+    if(text.length<1)continue;
+    out.push({el,text});
+  }
+  return out;
+}
+
 const TTS={
   debug: new URLSearchParams(location.search).has('debug'),
   audio: null,
@@ -2373,18 +2468,8 @@ const TTS={
 
   // Build DOM segments for highlight mapping
   buildSegments(){
-    this.segments=[];
-    const body=document.querySelector('.art-body');
-    if(!body)return;
-    const blocks=body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote > p, td, th');
-    const seen=new Set();
-    for(const el of blocks){
-      if(seen.has(el))continue;
-      seen.add(el);
-      const text=el.innerText.trim();
-      if(text.length<1)continue;
-      this.segments.push({el, text});
-    }
+    // Shared with inline-audio + align.py (see collectArticleSegments).
+    this.segments=collectArticleSegments();
   },
 
   // Build segment time ranges by aligning VTT cue text to DOM segment text
@@ -2697,7 +2782,7 @@ const TTS={
       });
       const d=await r.json();
       if(!d.ok){
-        alert('TTS 生成失败: '+(d.error||''));
+        showToast('TTS 生成失败: '+(d.error||''));
         return;
       }
       // Load subtitle/audio with absolute URLs for Android WebView diagnostics
@@ -2762,7 +2847,7 @@ const TTS={
     }catch(e){
       const msg=(e&&e.message)?e.message:String(e);
       console.error('TTS error:',e);
-      alert('TTS 请求失败: '+msg);
+      showToast('TTS 请求失败: '+msg);
     }finally{
       this.generating=false;
       ttsPlay.disabled=false;
@@ -2770,7 +2855,10 @@ const TTS={
     }
   },
 
-  _onPlayFail(e){console.warn('[tts] play() rejected:',e);this.playing=false;this.paused=false;this.updateUI();},
+  _onPlayFail(e){console.warn('[tts] play() rejected:',e);this.playing=false;this.paused=false;this.updateUI();
+    // Mobile browsers reject play() outside a user gesture (e.g. our async
+    // play after loadedmetadata). Surface it instead of failing silently.
+    if(e&&(e.name==='NotAllowedError'||e.name==='AbortError'))showToast('▶️ 浏览器拦截了自动播放，请再点一次播放按钮');},
   pause(){
     if(this.audio&&this.playing){
       this.audio.pause();
@@ -2963,23 +3051,8 @@ const InlineAudio={
         return;
       }
       // Build segments from article body
-      const segments=[];
-      const body=document.querySelector('.art-body');
-      if(body){
-        const blocks=body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote > p, td, th');
-        const seen=new Set();
-        for(const el of blocks){
-          if(seen.has(el))continue;
-          seen.add(el);
-          // Skip elements inside .audio-embed (UI, not article content)
-          if(el.closest('.audio-embed'))continue;
-          // Skip <p> directly inside <li> — loose-list rendering duplicates content
-          if(el.tagName==='P'&&el.parentElement&&el.parentElement.tagName==='LI')continue;
-          const text=el.innerText.trim();
-          if(text.length<1)continue;
-          segments.push({el,text});
-        }
-      }
+      // Shared with TTS + align.py (see collectArticleSegments).
+      const segments=collectArticleSegments();
       // Build segment map: try semantic alignment first, fall back to LCS
       let segMap,segTimeRanges;
       try{
@@ -3751,7 +3824,7 @@ async function enterEditMode(){
     if(!r.ok)throw new Error(r.status);
     rawMarkdown=await r.text();
   }catch(e){
-    alert('无法加载文件内容');
+    showToast('无法加载文件内容');
     return;
   }
   editMode=true;
@@ -3821,27 +3894,23 @@ async function saveEdit(){
     });
     const d=await r.json();
     if(!d.ok){
-      alert('保存失败: '+(d.error||''));
+      showToast('保存失败: '+(d.error||''));
       return;
     }
     // Success — exit edit mode and reload article
     exitEditMode(true);
   }catch(e){
-    alert('保存请求失败');
+    showToast('保存请求失败');
   }
 }
 
-function exitEditMode(reload){
+function exitEditMode(){
   editMode=false;
   editToggle.textContent='📝';
   editToggle.title='编辑';
   editToggle.classList.remove('active');
   const savedScroll=_editScrollTop;
-  if(reload&&curId){
-    loadArticle(curId).then(()=>{
-      setTimeout(()=>{ ct.scrollTop=savedScroll; },50);
-    });
-  }else if(curId){
+  if(curId){
     loadArticle(curId).then(()=>{
       setTimeout(()=>{ ct.scrollTop=savedScroll; },50);
     });
@@ -3860,6 +3929,14 @@ document.addEventListener('keydown',function(e){
 
 // ── Start: check auth first ──────────────────────────
 checkAuth();
+
+// ── PWA: register service worker (offline app shell; dynamic content stays
+// network-only — see /sw.js). Failure is non-fatal.
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js').catch(e=>console.warn('[sw] register failed:',e));
+  });
+}
 
 }();
 </script>

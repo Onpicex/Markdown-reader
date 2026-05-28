@@ -5,7 +5,21 @@ Usage: python3 align.py <article_path> <vtt_path> [output_json_path]
 Outputs JSON: { segMap: number[], segTimeRanges: {start,end}[], stats: {...} }
 """
 import sys, json, re, time, os
+from collections import Counter
 import numpy as np
+
+def _load_align_version():
+    """Single source of truth shared with server.js (align-version.json).
+    Bump there once; both sides pick it up. Falls back to a literal if the
+    file is missing/corrupt so alignment never breaks on a bad deploy."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'align-version.json')
+        with open(p, 'r', encoding='utf-8') as f:
+            return int(json.load(f).get('version', 14))
+    except Exception:
+        return 14
+
+ALIGN_VERSION = _load_align_version()
 
 def norm_text(t):
     """Strip whitespace and punctuation for comparison."""
@@ -244,12 +258,21 @@ def parse_vtt(vtt_text):
     return cues
 
 def parse_time(s):
-    """Parse VTT timestamp to seconds."""
-    s = s.replace(',', '.')
+    """Parse VTT timestamp to seconds. Tolerates HH:MM:SS.mmm, MM:SS.mmm,
+    bare seconds (SS.mmm), and HH:MM:SS:FF (trailing frame field ignored).
+    Never raises — a single malformed line must not abort the whole align."""
+    s = s.replace(',', '.').strip()
     parts = s.split(':')
-    if len(parts) == 2:
-        return int(parts[0]) * 60 + float(parts[1])
-    return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    try:
+        if len(parts) == 1:
+            return float(parts[0])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        # 3+ fields: HH:MM:SS(.mmm)[:FF] — use the first three, ignore frames
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except (ValueError, IndexError):
+        m = re.search(r'[\d.]+', s)
+        return float(m.group(0)) if m else 0.0
 
 def merge_cues(cues, target_len=40):
     """Merge consecutive short cues into chunks of ~target_len chars."""
@@ -283,15 +306,18 @@ def char_similarity(a, b):
     # Use a sliding window approach for efficiency when lengths differ a lot
     shorter, longer = (a, b) if m <= n else (b, a)
     if len(longer) > len(shorter) * 3:
-        # Slide shorter over longer, find best overlap
-        best = 0
-        for start in range(0, len(longer) - len(shorter) + 1, max(1, len(shorter) // 2)):
+        # Slide shorter over longer, find best overlap. Use multiset (Counter)
+        # intersection per window so repeated chars can't inflate the score —
+        # e.g. "啊啊啊" vs a window containing a single "啊" scores 1/3, not 1.0.
+        cs = Counter(shorter)
+        best = 0.0
+        step = max(1, len(shorter) // 2)
+        for start in range(0, len(longer) - len(shorter) + 1, step):
             window = longer[start:start + len(shorter) + len(shorter) // 2]
-            common = sum(1 for c in shorter if c in window)
+            common = sum((cs & Counter(window)).values())
             best = max(best, common / max(len(shorter), 1))
         return best
     # Simple character overlap ratio
-    from collections import Counter
     ca, cb = Counter(a), Counter(b)
     common = sum((ca & cb).values())
     return 2 * common / (len(a) + len(b))
@@ -512,7 +538,6 @@ def align(segments, cues, model):
     for ci in range(len(chunks)):
         cue_indices_in_chunk = chunk_indices[ci]
         seg_votes = [cue_to_seg[idx] for idx in cue_indices_in_chunk]
-        from collections import Counter
         most_common = Counter(seg_votes).most_common(1)[0][0]
         chunk_assignments.append(most_common)
     
@@ -959,8 +984,25 @@ def main():
     cues = parse_vtt(vtt_text)
     
     if not segments or not cues:
-        result = {'segMap': [], 'segTimeRanges': [], 'stats': {'error': 'no segments or cues'}}
-        json.dump(result, sys.stdout)
+        # A legitimately empty article / empty VTT is NOT a failure. Still write
+        # the cache file so server.js (which checks `code===0 && fs.existsSync`)
+        # returns 200 with an empty map instead of a 500, and stamp the version
+        # so it isn't regenerated forever.
+        result = {
+            'segMap': [], 'segTimeRanges': [],
+            'stats': {
+                'version': ALIGN_VERSION,
+                'segments': len(segments),
+                'cues': len(cues),
+                'segsHit': 0,
+                'error': 'no segments or cues',
+            },
+        }
+        if output_path:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f)
+        else:
+            json.dump(result, sys.stdout)
         return
     
     # Load model
@@ -978,7 +1020,7 @@ def main():
     # ALIGN_VERSION and regenerates on mismatch.
     segs_hit = len(set(seg_map))
     stats = {
-        'version': 13,
+        'version': ALIGN_VERSION,
         'segments': len(segments),
         'cues': len(cues),
         'segsHit': segs_hit,
