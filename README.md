@@ -13,7 +13,7 @@ Markdown 知识库阅读器,直接映射 Obsidian Vault 的目录结构和内容
 - 🎨 **三主题切换** - 浅色/暗色/护眼三种阅读主题
 - 📱 **响应式设计** - 三断点适配(桌面 / 平板 / 手机),移动端深度优化(safe-area / 滑动手势 / sticky 工具栏)
 - 📲 **PWA 支持** - 添加到主屏幕即获独立 App 体验,支持 iOS / Android
-- 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `http://your-host.example:8765`,Web 版保持不变
+- 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `http://your-host.example:<PORT>`,Web 版保持不变
 - 🎨 **书摘分享** - 选中文字生成精美书摘卡片,4 种风格可选,支持保存 PNG
 - 🎧 **TTS 听书** - Edge TTS 高品质语音朗读,实时段落高亮跟读,支持倍速调节,点击高亮段落可暂停/继续
 - 🎵 **MP3 字幕跟读** - 内嵌 MP3 音频逐段高亮跟读,智能模糊匹配算法对齐转录与原文,自动检测并跳过音频开头介绍
@@ -188,7 +188,7 @@ cp config.example.json config.json
 - 本地项目目录:`/Users/lhx/.openclaw/workspace/obsidian-reader`
 - macOS LaunchAgent:`~/Library/LaunchAgents/com.obsidian-reader.plist`
 - 服务端口:`8765`
-- 公网/移动端默认访问地址:`http://your-host.example:8765`
+- 公网/移动端默认访问地址:`http://your-host.example:<PORT>`
 - Android 客户端策略:使用独立原生 Android WebView wrapper 加载上面的服务 URL,不改动现有 Web 前端/后端。因为当前是 HTTP 地址,Android 端需要为 `your-host.example` 配置 cleartext traffic。
 
 ### 启动
@@ -197,7 +197,7 @@ cp config.example.json config.json
 ./serve.sh
 ```
 
-访问 `http://localhost:8765` 即可。
+访问 `http://localhost:<PORT>` 即可。
 
 ### macOS 开机自启(可选)
 
@@ -247,7 +247,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 ```text
 Android App
   └── WebView
-        └── http://your-host.example:8765
+        └── http://your-host.example:<PORT>
               └── 现有 Markdown Reader Web 服务
 ```
 
@@ -255,7 +255,7 @@ Android App
 
 - Web 版保持不变:继续由 `server.js` + `dist/index.html` 提供浏览器端体验。
 - Android 端只负责 WebView 容器能力:网络权限、Cookie、DOM Storage、下载、返回键、错误页、进度条。
-- 默认服务 URL:`http://your-host.example:8765`。
+- 默认服务 URL:`http://your-host.example:<PORT>`。
 - 因为默认 URL 是 HTTP,Android Manifest 需要 `android:usesCleartextTraffic="true"`,并建议在 `network_security_config.xml` 中只对白名单域名 `your-host.example` 放行明文流量。
 - 后续如切到 HTTPS,应移除 cleartext 配置。
 
@@ -373,7 +373,7 @@ Android wrapper 建议放在独立同级目录,例如:
 ```
 workspace/
 ├── obsidian-reader/          - Web 服务,本仓库
-└── obsidian-reader-android/  - 原生 Android WebView 壳,加载 http://your-host.example:8765
+└── obsidian-reader-android/  - 原生 Android WebView 壳,加载 http://your-host.example:<PORT>
 ```
 
 ## License
