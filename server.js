@@ -176,13 +176,51 @@ function _isDirectLoopback(req) {
   const ip = (req.socket && req.socket.remoteAddress) || '';
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
-// A loopback/RFC1918/ULA direct peer is our reverse proxy (or local); only then
-// do we trust its forwarding headers to recover the real client.
+// Optional explicit allow-list of reverse-proxy source addresses. Entries are
+// bare IPs ("192.168.1.10") or IPv4 CIDRs ("192.168.1.0/24"). When set, ONLY
+// loopback + these peers are trusted to set X-Forwarded-* / X-Real-IP, so a
+// random LAN client connecting directly can no longer forge the real-client IP
+// (rate-limit/SSE keys) or the https flag (Secure cookie). When empty/unset we
+// fall back to the broad RFC1918/ULA heuristic for backward compatibility.
+const _trustedProxies = Array.isArray(config.trustedProxies)
+  ? config.trustedProxies.filter(s => typeof s === 'string' && s.trim()).map(s => s.trim())
+  : [];
+
+function _ip4ToInt(s) {
+  const p = s.split('.');
+  if (p.length !== 4) return null;
+  let n = 0;
+  for (const o of p) {
+    const v = Number(o);
+    if (!Number.isInteger(v) || v < 0 || v > 255) return null;
+    n = (n * 256) + v;
+  }
+  return n >>> 0;
+}
+function _matchProxyEntry(addr, entry) {
+  const e = entry.replace(/^::ffff:/, '');
+  if (e.includes('/')) {
+    const [net, bitsStr] = e.split('/');
+    const bits = Number(bitsStr);
+    const ai = _ip4ToInt(addr), ni = _ip4ToInt(net);
+    if (ai === null || ni === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+    if (bits === 0) return true;
+    const mask = (0xffffffff << (32 - bits)) >>> 0;
+    return (ai & mask) === (ni & mask);
+  }
+  return addr === e;
+}
+// True iff the direct peer is our reverse proxy (or local), i.e. the only peers
+// whose forwarding headers we trust to recover the real client.
 function _isTrustedPeer(ip) {
   if (!ip) return false;
   const a = ip.replace(/^::ffff:/, '');
-  return a === '127.0.0.1' || a === '::1' ||
-    a.startsWith('10.') || a.startsWith('192.168.') ||
+  if (a === '127.0.0.1' || a === '::1') return true; // loopback is always us
+  if (_trustedProxies.length) {
+    return _trustedProxies.some(e => _matchProxyEntry(a, e));
+  }
+  // No explicit allow-list → trust any private/internal direct peer (legacy).
+  return a.startsWith('10.') || a.startsWith('192.168.') ||
     /^172\.(1[6-9]|2\d|3[01])\./.test(a) ||
     /^f[cd]/i.test(a); // fc00::/7
 }
@@ -359,7 +397,9 @@ function serveFileWithRange(req, res, filepath, cacheControl) {
         const start = parseInt(m[1]);
         let end = m[2] ? parseInt(m[2]) : stat.size - 1;
         if (end >= stat.size) end = stat.size - 1; // clamp ranges past EOF (e.g. bytes=0-999999999) so headers match bytes sent
-        if (start >= stat.size) {
+        // Unsatisfiable: start past EOF, or a reversed range (bytes=100-50)
+        // which would otherwise yield a negative Content-Length.
+        if (start >= stat.size || end < start) {
           res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
           res.end();
           return;
@@ -561,7 +601,9 @@ const server = http.createServer(async (req, res) => {
           const start = parseInt(m[1]);
           let end = m[2] ? parseInt(m[2]) : stat.size - 1;
           if (end >= stat.size) end = stat.size - 1; // clamp ranges past EOF so headers match bytes sent
-          if (start >= stat.size) {
+          // Unsatisfiable: start past EOF, or a reversed range (bytes=100-50)
+          // which would otherwise yield a negative Content-Length.
+          if (start >= stat.size || end < start) {
             res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
             res.end();
             return;
@@ -1639,7 +1681,11 @@ function parseOldFormatBlocks(content, filterTitle) {
 }
 
 const PORT = config.port || 8765;
-const BIND = config.bind || '0.0.0.0';
+// Default to loopback (never 0.0.0.0) when bind is absent — consistent with the
+// safe default in loadConfig(), so a config that exists but omits `bind` can't
+// silently expose the vault on every interface. A real LAN/proxy deployment
+// sets `bind` explicitly (e.g. "0.0.0.0" or the LAN IP).
+const BIND = config.bind || '127.0.0.1';
 server.listen(PORT, BIND, () => {
   console.log(`🚀 Obsidian Reader server on ${BIND}:${PORT}`);
   console.log(`   Dist: ${DIST}`);

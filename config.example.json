@@ -1,6 +1,7 @@
 {
   "vault": "/path/to/your/obsidian/vault",
   "port": 8765,
-  "bind": "0.0.0.0",
+  "bind": "127.0.0.1",
+  "trustedProxies": [],
   "password": "your-secure-password"
 }

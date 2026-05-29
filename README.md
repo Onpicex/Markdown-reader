@@ -13,7 +13,7 @@ Markdown 知识库阅读器,直接映射 Obsidian Vault 的目录结构和内容
 - 🎨 **三主题切换** - 浅色/暗色/护眼三种阅读主题
 - 📱 **响应式设计** - 三断点适配(桌面 / 平板 / 手机),移动端深度优化(safe-area / 滑动手势 / sticky 工具栏)
 - 📲 **PWA 支持** - 添加到主屏幕即获独立 App 体验,支持 iOS / Android
-- 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `http://your-host.example:<PORT>`,Web 版保持不变
+- 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `https://your-host.example`(经 TLS 反代),Web 版保持不变
 - 🎨 **书摘分享** - 选中文字生成精美书摘卡片,4 种风格可选,支持保存 PNG
 - 🎧 **TTS 听书** - Edge TTS 高品质语音朗读,实时段落高亮跟读,支持倍速调节,点击高亮段落可暂停/继续
 - 🎵 **MP3 字幕跟读** - 内嵌 MP3 音频逐段高亮跟读,智能模糊匹配算法对齐转录与原文,自动检测并跳过音频开头介绍
@@ -166,17 +166,21 @@ cp config.example.json config.json
 {
   "vault": "/path/to/your/obsidian/vault",
   "port": 8765,
-  "bind": "0.0.0.0",
+  "bind": "127.0.0.1",
+  "trustedProxies": [],
   "password": "your-secure-password",
   "ttsEnabled": true
 }
 ```
 
+> `bind` 留 `127.0.0.1` 仅本机;经反代对外时按需改成局域网地址(或 `0.0.0.0`)并把 `trustedProxies` 设为反代的局域网 IP(如 `["192.168.x.x"]`)。
+
 | 字段 | 说明 |
 |------|------|
 | `vault` | Obsidian vault 绝对路径 |
 | `port` | 服务端口(默认 8765) |
-| `bind` | 绑定地址(`0.0.0.0` 允许局域网访问,`127.0.0.1` 仅本机) |
+| `bind` | 绑定地址(`0.0.0.0` 允许局域网访问,`127.0.0.1` 仅本机;**缺省/缺失该字段时按 `127.0.0.1` 处理**,不会默认监听全网卡) |
+| `trustedProxies` | (可选)反代来源 IP/CIDR 白名单(如 `["192.168.x.x"]` 或 `["192.168.x.0/24"]`)。设置后**仅**信任这些来源 + 本机回环的 `X-Forwarded-*`/`X-Real-IP`;留空则回退为信任所有 RFC1918/ULA 内网直连(向后兼容)。**公网经反代部署时建议显式设为反代的局域网 IP**,避免同网段客户端直连伪造真实 IP(影响登录限速/SSE 限制)或 https 标志(Secure cookie) |
 | `password` | 访问密码(留空 `""` 关闭密码功能;**首次设置必须从 127.0.0.1 操作**) |
 | `ttsEnabled` | TTS 听书功能开关(默认 `false`,设为 `true` 显示所有 TTS 相关按钮) |
 | `mlxWhisperBin` | (可选)mlx_whisper 可执行文件路径,默认从 `PATH` 解析 |
@@ -188,8 +192,8 @@ cp config.example.json config.json
 - 本地项目目录:`/Users/lhx/.openclaw/workspace/obsidian-reader`
 - macOS LaunchAgent:`~/Library/LaunchAgents/com.obsidian-reader.plist`
 - 服务端口:`8765`
-- 公网/移动端默认访问地址:`http://your-host.example:<PORT>`
-- Android 客户端策略:使用独立原生 Android WebView wrapper 加载上面的服务 URL,不改动现有 Web 前端/后端。因为当前是 HTTP 地址,Android 端需要为 `your-host.example` 配置 cleartext traffic。
+- 公网/移动端访问:**务必在前面套一个 TLS 终止的反向代理**(nginx / Caddy / 群晖反代等),默认地址形如 `https://your-host.example`。本服务自身只跑明文 HTTP,设计为绑定到 `127.0.0.1` 或局域网地址、由反代回源,**不要把明文端口直接暴露公网**。反代部署时记得设置 `trustedProxies` 为反代的局域网 IP。
+- Android 客户端策略:使用独立原生 Android WebView wrapper 加载上面的 **HTTPS** 服务 URL,不改动现有 Web 前端/后端。走 HTTPS 时无需任何 cleartext 配置。
 
 ### 启动
 
@@ -247,17 +251,17 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 ```text
 Android App
   └── WebView
-        └── http://your-host.example:<PORT>
-              └── 现有 Markdown Reader Web 服务
+        └── https://your-host.example          (TLS 反向代理)
+              └── http://127.0.0.1:<PORT>       现有 Markdown Reader Web 服务
 ```
 
 设计原则:
 
 - Web 版保持不变:继续由 `server.js` + `dist/index.html` 提供浏览器端体验。
 - Android 端只负责 WebView 容器能力:网络权限、Cookie、DOM Storage、下载、返回键、错误页、进度条。
-- 默认服务 URL:`http://your-host.example:<PORT>`。
-- 因为默认 URL 是 HTTP,Android Manifest 需要 `android:usesCleartextTraffic="true"`,并建议在 `network_security_config.xml` 中只对白名单域名 `your-host.example` 放行明文流量。
-- 后续如切到 HTTPS,应移除 cleartext 配置。
+- 默认服务 URL:`https://your-host.example`(经 TLS 反向代理回源到本服务)。
+- 走 HTTPS 时**不要**开启 cleartext:保持 `android:usesCleartextTraffic="false"`(默认),无需 `network_security_config.xml` 明文白名单。
+- 仅当你明确只在受信任局域网内直连明文端口时,才临时对该内网域名/IP 放行 cleartext;一旦上公网请立即移除。
 
 最小 WebView 配置要点:
 
@@ -373,7 +377,7 @@ Android wrapper 建议放在独立同级目录,例如:
 ```
 workspace/
 ├── obsidian-reader/          - Web 服务,本仓库
-└── obsidian-reader-android/  - 原生 Android WebView 壳,加载 http://your-host.example:<PORT>
+└── obsidian-reader-android/  - 原生 Android WebView 壳,加载 https://your-host.example
 ```
 
 ## License
