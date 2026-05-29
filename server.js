@@ -35,7 +35,10 @@ function loadConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
   } catch {
-    return { vault: '', port: 8765, bind: '0.0.0.0', password: '' };
+    // Safe defaults for a *missing* config: bind to loopback (never 0.0.0.0)
+    // and no password — so a lost/reset config can't silently expose the vault
+    // to the network. A real deployment ships its own config.json with bind set.
+    return { vault: '', port: 8765, bind: '127.0.0.1', password: '' };
   }
 }
 
@@ -165,8 +168,46 @@ function verifyToken(t) {
   try { return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(mac)); }
   catch { return false; }
 }
+// True iff the TCP connection itself comes from this machine (loopback),
+// independent of any X-Forwarded-* header. Use this for "must be physically
+// local" gates so a forged X-Forwarded-For can never make a remote request
+// look local.
+function _isDirectLoopback(req) {
+  const ip = (req.socket && req.socket.remoteAddress) || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+// A loopback/RFC1918/ULA direct peer is our reverse proxy (or local); only then
+// do we trust its forwarding headers to recover the real client.
+function _isTrustedPeer(ip) {
+  if (!ip) return false;
+  const a = ip.replace(/^::ffff:/, '');
+  return a === '127.0.0.1' || a === '::1' ||
+    a.startsWith('10.') || a.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(a) ||
+    /^f[cd]/i.test(a); // fc00::/7
+}
+function _reqIsHttps(req) {
+  if (req.socket && req.socket.encrypted) return true;
+  const direct = (req.socket && req.socket.remoteAddress) || '';
+  if (!_isTrustedPeer(direct)) return false;
+  return String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+}
 function _clientIp(req) {
-  return (req.socket && req.socket.remoteAddress) || 'unknown';
+  const direct = (req.socket && req.socket.remoteAddress) || 'unknown';
+  if (_isTrustedPeer(direct)) {
+    // X-Real-IP is set by the proxy to the peer it saw (overwrites any
+    // client-supplied value), so it is not spoofable through the XFF chain.
+    const real = req.headers['x-real-ip'];
+    if (real) return String(real).trim();
+    // Else take the LAST X-Forwarded-For hop — the one our trusted proxy
+    // appended. Earlier entries are client-supplied and forgeable.
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) {
+      const parts = String(xff).split(',').map(s => s.trim()).filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
+  }
+  return direct;
 }
 function _rateLimitAuth(ip) {
   const now = Date.now();
@@ -236,7 +277,10 @@ function resolveVaultPath(rel) {
 }
 
 function isAuthed(req) {
-  if (!config.password) return true; // no password set = open access
+  // No password set: open ONLY to the local machine. Behind a reverse proxy or
+  // on the LAN this denies access until a password is configured locally, so a
+  // fresh/empty config never serves the vault to the network.
+  if (!config.password) return _isDirectLoopback(req);
   const cookie = req.headers.cookie || '';
   const m = cookie.match(/or_token=([A-Za-z0-9._\-]+)/);
   return !!(m && verifyToken(m[1]));
@@ -313,7 +357,8 @@ function serveFileWithRange(req, res, filepath, cacheControl) {
       const m = range.match(/bytes=(\d+)-(\d*)/);
       if (m) {
         const start = parseInt(m[1]);
-        const end = m[2] ? parseInt(m[2]) : stat.size - 1;
+        let end = m[2] ? parseInt(m[2]) : stat.size - 1;
+        if (end >= stat.size) end = stat.size - 1; // clamp ranges past EOF (e.g. bytes=0-999999999) so headers match bytes sent
         if (start >= stat.size) {
           res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
           res.end();
@@ -409,9 +454,12 @@ const server = http.createServer(async (req, res) => {
         // Successful auth resets the failure counter
         _authFails.delete(ip);
         const token = makeToken();
+        // Secure only when the original request was HTTPS (we're behind a
+        // TLS-terminating proxy); left unset for direct localhost/LAN HTTP.
+        const secure = _reqIsHttps(req) ? '; Secure' : '';
         res.writeHead(200, {
           'Content-Type': 'application/json',
-          'Set-Cookie': `or_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`,
+          'Set-Cookie': `or_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure}`,
         });
         res.end(JSON.stringify({ ok: true }));
       } else {
@@ -511,7 +559,8 @@ const server = http.createServer(async (req, res) => {
         const m = range.match(/bytes=(\d+)-(\d*)/);
         if (m) {
           const start = parseInt(m[1]);
-          const end = m[2] ? parseInt(m[2]) : stat.size - 1;
+          let end = m[2] ? parseInt(m[2]) : stat.size - 1;
+          if (end >= stat.size) end = stat.size - 1; // clamp ranges past EOF so headers match bytes sent
           if (start >= stat.size) {
             res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
             res.end();
@@ -1255,9 +1304,9 @@ const server = http.createServer(async (req, res) => {
     try {
       const { oldPassword, newPassword } = JSON.parse(body);
       if (!config.password) {
-        const ip = _clientIp(req);
-        const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-        if (!isLoopback) {
+        // Must be physically local — check the raw socket, not _clientIp (which
+        // honours X-Forwarded-For) so a forged header can't fake loopback.
+        if (!_isDirectLoopback(req)) {
           jsonReply(res, 403, { ok: false, error: '初次设置密码必须在本机（127.0.0.1）操作' });
           return;
         }
@@ -1277,9 +1326,10 @@ const server = http.createServer(async (req, res) => {
       rotateSessionSecret();
       if (config.password) {
         const token = makeToken();
+        const secure = _reqIsHttps(req) ? '; Secure' : '';
         res.writeHead(200, {
           'Content-Type': 'application/json',
-          'Set-Cookie': `or_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`,
+          'Set-Cookie': `or_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure}`,
         });
         res.end(JSON.stringify({ ok: true, msg: newPassword ? '密码已更新' : '密码已关闭' }));
       } else {
@@ -1302,7 +1352,19 @@ const server = http.createServer(async (req, res) => {
       try {
         const parsed = JSON.parse(body);
         let changed = false;
+        let vaultChanged = false;
         if (parsed.vault && typeof parsed.vault === 'string') {
+          // Validate: must be an existing directory and not the filesystem root.
+          // Without this, a caller could point the vault at '/' and then
+          // read/write the whole filesystem through /vault/* (isInside('/', …)
+          // is always true).
+          let okDir = false;
+          try { okDir = fs.statSync(parsed.vault).isDirectory(); } catch {}
+          if (!okDir || path.resolve(parsed.vault) === path.parse(path.resolve(parsed.vault)).root) {
+            jsonReply(res, 400, { ok: false, error: 'vault 必须是一个已存在的目录（且不能是根目录）' });
+            return;
+          }
+          if (parsed.vault !== config.vault) vaultChanged = true;
           config.vault = parsed.vault;
           changed = true;
         }
@@ -1312,6 +1374,13 @@ const server = http.createServer(async (req, res) => {
         }
         if (changed) {
           saveConfig(config);
+          // Re-point the live machinery at the new vault, otherwise the watcher
+          // and auto-rescan keep tracking the OLD path until the next restart.
+          if (vaultChanged) {
+            invalidateBasenameIndex();
+            startWatching(config.vault);
+            scheduleRescan('config-change');
+          }
           jsonReply(res, 200, { ok: true, vault: config.vault, ttsEnabled: config.ttsEnabled === true });
         } else {
           jsonReply(res, 400, { ok: false, error: 'No valid fields provided' });

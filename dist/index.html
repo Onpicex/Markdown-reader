@@ -2,6 +2,10 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<!-- Auto-upgrade any http:// subresource (e.g. external images embedded in
+     notes) to https:// — keeps the page from dropping to "not secure" when a
+     note references an http image, and avoids serving mixed content. -->
+<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>知识库阅读器</title>
 <link rel="manifest" href="/manifest.webmanifest">
@@ -703,13 +707,18 @@ async function syncReadState(){
     if(!data||!data.ok)return false;
     _loadReadState();
     const sr=data.reads||{}, st=data.tombstones||{};
-    // server → local
-    for(const k in sr){ const v=Number(sr[k])||0; if(v>(_reads.get(k)||0)) _reads.set(k,v); }
-    for(const k in st){ const v=Number(st[k])||0; if(v>(_tombs.get(k)||0)) _tombs.set(k,v); }
+    // server → local: pull when local is MISSING the entry (a read is a read
+    // even at ts=0, e.g. legacy-migrated marks) or the server's ts is newer.
+    // A bare `v > local` dropped ts=0 reads on a fresh device (0 > 0 = false),
+    // which looked like a reset after switching origin (http:8765 → https:8766).
+    for(const k in sr){ const v=Number(sr[k])||0; if(!_reads.has(k) || v>_reads.get(k)) _reads.set(k,v); }
+    for(const k in st){ const v=Number(st[k])||0; if(!_tombs.has(k) || v>_tombs.get(k)) _tombs.set(k,v); }
     // local newer than server → push back (each with its own ts)
     const pushReads=[],pushTombs=[];
-    for(const [k,v] of _reads){ if(v>(Number(sr[k])||0)) pushReads.push(k); }
-    for(const [k,v] of _tombs){ if(v>(Number(st[k])||0)) pushTombs.push(k); }
+    // local → server: push when server is MISSING the entry or local ts is newer
+    // (mirrors the pull side so a ts=0 read on a device also reaches the server).
+    for(const [k,v] of _reads){ if(!(k in sr) || v>(Number(sr[k])||0)) pushReads.push(k); }
+    for(const [k,v] of _tombs){ if(!(k in st) || v>(Number(st[k])||0)) pushTombs.push(k); }
     _saveReadState();
     pushReads.forEach(k=>_pushReadState('add',k,_reads.get(k)));
     pushTombs.forEach(k=>_pushReadState('remove',k,_tombs.get(k)));
