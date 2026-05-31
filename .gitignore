@@ -17,6 +17,10 @@ node_modules/
 # Logs
 *.log
 
+# Local handoff / audit notes
+HANDOFF*.md
+archive/HANDOFF*.md
+
 # Debug/test scripts
 debug-*.mjs
 test-*.mjs

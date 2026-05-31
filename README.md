@@ -54,9 +54,6 @@ obsidian-reader/
 ├── config.example.json       # safe config template
 ├── config.json               # local config, ignored by git
 ├── read-articles.json        # read-state store, ignored by git
-├── HANDOFF-2026-05-14.md     # historical handoff notes
-├── HANDOFF-2026-05-20.md
-├── HANDOFF-2026-05-29.md
 └── dist/
     ├── index.html            # single-page frontend app
     ├── sw.js                 # PWA service worker
