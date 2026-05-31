@@ -1,166 +1,106 @@
-# Markdown Reader 📚
+# Obsidian Reader
 
-Markdown 知识库阅读器,直接映射 Obsidian Vault 的目录结构和内容,在浏览器中高效阅读。
+A lightweight web reader for an Obsidian vault. It scans Markdown files into a
+catalog, serves the original vault files through a small Node.js backend, and
+renders them in a single-page browser app.
 
-![License](https://img.shields.io/badge/license-MIT-blue)
+This repository's default README is intentionally in English. Runtime secrets and
+machine-specific values belong in `config.json`, which is ignored by git.
 
-## 特性
+## What It Does
 
-- 📖 **零构建延迟** - Obsidian 里改文章,刷新页面即见最新
-- 🔍 **全局搜索** - 侧边栏搜索框,键盘 `/` 快捷聚焦
-- ✅ **已读/未读 + 跨设备同步** - 手动标记,服务端持久化 + 多设备自动合并同步
-- 🔒 **访问密码** - Cookie 认证保持一年,可通过网页修改密码
-- 🎨 **三主题切换** - 浅色/暗色/护眼三种阅读主题
-- 📱 **响应式设计** - 三断点适配(桌面 / 平板 / 手机),移动端深度优化(safe-area / 滑动手势 / sticky 工具栏)
-- 📲 **PWA 支持** - 添加到主屏幕即获独立 App 体验,支持 iOS / Android
-- 🤖 **Android WebView 客户端** - 可用独立原生 Android WebView 壳加载现有服务 URL,默认 `https://your-host.example`(经 TLS 反代),Web 版保持不变
-- 🎨 **书摘分享** - 选中文字生成精美书摘卡片,4 种风格可选,支持保存 PNG
-- 🎧 **TTS 听书** - Edge TTS 高品质语音朗读,实时段落高亮跟读,支持倍速调节,点击高亮段落可暂停/继续
-- 🎵 **MP3 字幕跟读** - 内嵌 MP3 音频逐段高亮跟读,智能模糊匹配算法对齐转录与原文,自动检测并跳过音频开头介绍
-- 🧠 **语义 Embedding 对齐** - 当口语讲稿与书面文章用词差异大时,自动启用 AI 语义匹配(bge-small-zh),匹配率从 33% 提升到 100%,完全本地运行不花钱
-- 🗣️ **对话感知对齐** - 连续短引号对话自动检测,预合并 + 字符级匹配 + 按文字长度比例分配时间,Whisper 幻觉丢失的对话段也能获得合理跟读时间
-- 🎯 **从选中处听** - 选中文字后一键跳转到对应音频位置播放(支持 TTS 和 MP3)
-- 🎵 **媒体播放** - 支持音频(mp3/wav/ogg/m4a)和视频(mp4/webm)内嵌播放
-- 🔗 **Wiki Link** - 支持 `[[链接]]` 站内跳转和 `![[文件]]` 嵌入
-- 📝 **高亮标注与笔记** - 选中文字可高亮或添加笔记,存储在同目录笔记.md
-- 🔗 **笔记链接跳转** - 从笔记页面点击跳转到原文对应高亮位置
-- ⬅️➡️ **上下篇导航** - 文章底部快速切换前/后一篇
-- 📂 **递归目录树** - 侧边栏多级目录展开/折叠,记忆展开状态
-- ✏️ **编辑模式** - 一键切换阅读/编辑模式,直接修改 Markdown 源文件
-- ☑️ **可点击 Checkbox** - 阅读模式下直接勾选/取消 Checkbox,自动保存到源文件
-- ⚙️ **TTS 开关** - 设置中一键开关 TTS 听书功能,即时生效并持久化
-- 🍞 **面包屑导航** - 可点击的层级路径导航
-- 🔄 **热扫描** - 新增/删除文章后点击 🔄 即时更新目录,vault 变更自动检测
-- ⚡ **极速加载** - localStorage 缓存 + ETag 304 + gzip 压缩,目录秒出
+- Mirrors an Obsidian vault directory structure in a browser sidebar.
+- Renders Markdown on demand with `marked.js`.
+- Supports Obsidian wiki links such as `[[Page]]` and embedded media such as
+  `![[file.mp3]]`, `![[image.png]]`, and `![[video.mp4]]`.
+- Tracks read/unread state with sidebar checkmarks and persistent storage.
+- Syncs read state across devices with last-write-wins timestamps and tombstones,
+  so "unread" actions do not get resurrected by stale clients.
+- Provides article search from the sidebar.
+- Includes font-size controls, light/dark/eye-care themes, and mobile layout
+  support.
+- Offers password protection with a one-year HTTP-only cookie session.
+- Lets authenticated users update the vault path and TTS setting from the UI.
+- Supports manual rescans and automatic vault-change rescans.
+- Ships PWA metadata and a service worker for an installable app shell.
+- Expands first-level categories by default while deeper levels remain collapsed.
+- Provides optional TTS and MP3 subtitle-following features when enabled.
 
-## 依赖
+## Current Local Deployment
 
-### 必需
+These values describe the active local deployment on this machine. They are not
+required defaults for every clone.
 
-| 依赖 | 说明 |
-|------|------|
-| **Node.js** ≥ 18 | HTTP 服务器运行时 |
-| **Python 3** | Vault 扫描器 (`scan.py`) |
-| **edge-tts** | Microsoft Edge TTS 引擎,生成 MP3 + WebVTT 字幕。免费,无需 API Key,本地调用微软 Edge 服务 |
+| Item | Value |
+| --- | --- |
+| Project path | `/Users/lhx/.openclaw/workspace/obsidian-reader` |
+| Vault path | `/Users/lhx/Library/Mobile Documents/iCloud~md~obsidian/Documents/Openclaw` |
+| LaunchAgent label | `com.obsidian-reader` |
+| Port | `8765` |
+| Bind address | `0.0.0.0` |
+| LAN URL | `http://192.168.x.x:8765` |
+| Alignment cache version | `14` |
+| TTS | Disabled in `config.json` |
+
+## Repository Layout
+
+```text
+obsidian-reader/
+├── server.js                 # Node.js HTTP backend and vault proxy
+├── scan.py                   # Markdown vault scanner, writes catalog.json
+├── align.py                  # MP3/VTT to article paragraph alignment
+├── align-version.json        # Shared alignment cache version
+├── serve.sh                  # scan-then-start launch script
+├── config.example.json       # safe config template
+├── config.json               # local config, ignored by git
+├── read-articles.json        # read-state store, ignored by git
+├── HANDOFF-2026-05-14.md     # historical handoff notes
+├── HANDOFF-2026-05-20.md
+├── HANDOFF-2026-05-29.md
+└── dist/
+    ├── index.html            # single-page frontend app
+    ├── sw.js                 # PWA service worker
+    ├── manifest.webmanifest
+    ├── data/catalog.json     # generated catalog, ignored by git
+    └── vendor/
+        ├── marked.min.js
+        ├── purify.min.js
+        └── html2canvas.min.js
+```
+
+## Runtime Requirements
+
+Required:
+
+- Node.js 18 or newer
+- Python 3
+
+Optional:
+
+- `edge-tts`, only needed when TTS is enabled.
+- `mlx-whisper`, only needed for local MP3 transcription on Apple Silicon.
+- `sentence-transformers`, only needed for semantic alignment fallback quality.
+
+Install optional Python tools only if you use those features:
 
 ```bash
 pip install edge-tts
-```
-
-### 可选(MP3 字幕跟读功能)
-
-| 依赖 | 说明 |
-|------|------|
-| **mlx-whisper** | Apple Silicon 本地语音转文字模型,用于将内嵌 MP3 音频转录为 VTT 字幕。仅"字幕跟读"功能需要,需 Apple Silicon Mac |
-| **sentence-transformers** | 语义 Embedding 对齐模型,口语讲稿与书面文章的智能匹配。可选,无此依赖时自动降级为 LCS 字符匹配 |
-
-```bash
 pip install mlx-whisper
-pip install sentence-transformers  # 可选,语义对齐
+pip install sentence-transformers
 ```
 
-- mlx-whisper 模型:`mlx-community/whisper-large-v3-turbo`(首次使用自动下载,约 1.5GB)
-- embedding 模型:`BAAI/bge-small-zh-v1.5`(首次使用自动下载,约 90MB)
-- 性能:12 分钟音频 ≈ 1.5 分钟转录(Apple Silicon)
-- 注意:mlx_whisper CLI 路径优先读 `config.json` 的 `mlxWhisperBin`，否则读环境变量 `MLX_WHISPER_BIN`，最后回退到 `PATH` 中的 `mlx_whisper`
+The frontend dependencies are vendored in `dist/vendor/`; no frontend build step
+is required.
 
-### 前端(已内置,无需安装)
+## Configuration
 
-| 库 | 用途 |
-|------|------|
-| **marked.js** | Markdown 渲染 |
-| **html2canvas** | 书摘分享卡片/截图生成 |
-
-## 功能成本分类
-
-### 🆓 零成本功能(本地运行,不消耗 Token)
-
-| 功能 | 技术实现 |
-|------|----------|
-| Markdown 渲染阅读 | marked.js (浏览器端) |
-| TTS 听书 + 段落高亮 | edge-tts (免费微软 Edge 服务) |
-| MP3 字幕跟读 | mlx-whisper (本地 Apple Silicon 模型) |
-| 语义 Embedding 对齐 | sentence-transformers + bge-small-zh (本地 CPU) |
-| MP3 从选中处听 | 前端 seek + HTTP Range |
-| 书摘分享卡片 | html2canvas (浏览器端) |
-| 高亮标注 + 笔记 | 本地文件存储 (笔记.md) |
-| 全局搜索 | 本地 catalog.json |
-| 多主题切换 | CSS + localStorage |
-| 目录树浏览 | 本地 catalog 数据 |
-| 编辑/阅读模式 | 直接读写 vault 文件 |
-| Wiki Link 跳转 | 前端路由 |
-| 热扫描 + SSE 推送 | fs.watch + Python scanner |
-| 密码认证 | Cookie session |
-| 已读跨设备同步 | 服务端 JSON + union-merge |
-| PWA | manifest + Service Worker |
-| 移动端手势 | 原生 touch events |
-
-### 💰 消耗 AI Token 的功能
-
-| 功能 | 说明 |
-|------|------|
-| 无 | 本项目完全不依赖任何 AI API,所有功能均在本地运行 |
-
-> **Note:** 本项目 100% 自包含,无需 OpenAI/Anthropic/Google API Key。唯一的网络依赖是 edge-tts,使用微软免费的 Edge 服务。
-
-## 架构
-
-```
-浏览器 → Node.js server
-              │
-              ├── /              → SPA 前端
-              ├── /data/*        → catalog.json(文章目录,ETag + gzip)
-              ├── /vault/*       → Obsidian vault 文件代理
-              ├── /tts-cache/*   → TTS 音频缓存
-              ├── /api/auth      → POST 登录认证
-              ├── /api/check-auth→ GET 检查认证状态
-              ├── /api/config    → GET/POST vault 路径配置
-              ├── /api/password  → POST 修改密码
-              ├── /api/rescan    → GET 重新扫描 vault
-              ├── /api/tts       → POST 生成 TTS 音频 + 字幕
-              ├── /api/note      → POST 添加笔记/高亮
-              ├── /api/note/delete → POST 删除笔记
-              ├── /api/note/edit → POST 编辑笔记
-              ├── /api/notes     → GET 获取文章笔记
-              ├── /api/transcribe → POST 发起音频转录
-              ├── /api/transcribe/status → POST 查询转录进度
-              ├── /api/align     → POST 语义 Embedding 对齐(自动缓存)
-              ├── /api/read-state → GET 获取全量已读列表
-              ├── /api/read-state/add → POST 批量标记已读
-              ├── /api/read-state/remove → POST 批量取消已读
-              └── /api/events    → SSE 实时目录更新推送(需鉴权,单 IP ≤5 连接,30s 心跳)
-```
-
-- **前端**:单页应用,[marked.js](https://github.com/markedjs/marked) 浏览器端实时渲染 Markdown,[html2canvas](https://github.com/niklasvh/html2canvas) 生成书摘图片
-- **后端**:Node.js 轻量 HTTP server,直接代理 vault 目录,gzip 压缩文本响应
-- **扫描器**:`scan.py` 扫描 vault 生成 `catalog.json`(只含标题和路径,不含内容)
-- **TTS**:[Edge TTS](https://github.com/rany2/edge-tts) 生成语音 + WebVTT 字幕,前端实时高亮跟读
-- **转录**:mlx-whisper 本地转录 MP3 → VTT 字幕,前端模糊匹配对齐原文段落
-- **语义对齐**:`align.py` 用 [bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) embedding 模型计算 VTT 块与文章段落的余弦相似度,单调递增贪心分配 + 插值填补空段,结果缓存为 `.align.json`。对话运检测自动将连续短句合并为虚拟段,未映射段落按文字长度比例分配时间,缓存自动根据文章/VTT mtime 失效重生
-
-## 快速开始
-
-### 前置要求
-
-- Node.js ≥ 18
-- Python 3
-- [edge-tts](https://github.com/rany2/edge-tts)(TTS 功能需要):`pip install edge-tts`
-- [mlx-whisper](https://github.com/ml-explore/mlx-examples)(MP3 字幕跟读,可选):`pip install mlx-whisper`
-
-### 安装
+Create a local config from the template:
 
 ```bash
-git clone https://github.com/Onpicex/Markdown-reader.git
-cd Markdown-reader
-
-# 创建配置
 cp config.example.json config.json
-# 编辑 config.json,设置你的 vault 路径和密码
 ```
 
-### 配置
-
-编辑 `config.json`:
+Example:
 
 ```json
 {
@@ -169,216 +109,221 @@ cp config.example.json config.json
   "bind": "127.0.0.1",
   "trustedProxies": [],
   "password": "your-secure-password",
-  "ttsEnabled": true
+  "ttsEnabled": false
 }
 ```
 
-> `bind` 留 `127.0.0.1` 仅本机;经反代对外时按需改成局域网地址(或 `0.0.0.0`)并把 `trustedProxies` 设为反代的局域网 IP(如 `["192.168.x.x"]`)。
+Fields:
 
-| 字段 | 说明 |
-|------|------|
-| `vault` | Obsidian vault 绝对路径 |
-| `port` | 服务端口(默认 8765) |
-| `bind` | 绑定地址(`0.0.0.0` 允许局域网访问,`127.0.0.1` 仅本机;**缺省/缺失该字段时按 `127.0.0.1` 处理**,不会默认监听全网卡) |
-| `trustedProxies` | (可选)反代来源 IP/CIDR 白名单(如 `["192.168.x.x"]` 或 `["192.168.x.0/24"]`)。设置后**仅**信任这些来源 + 本机回环的 `X-Forwarded-*`/`X-Real-IP`;留空则回退为信任所有 RFC1918/ULA 内网直连(向后兼容)。**公网经反代部署时建议显式设为反代的局域网 IP**,避免同网段客户端直连伪造真实 IP(影响登录限速/SSE 限制)或 https 标志(Secure cookie) |
-| `password` | 访问密码(留空 `""` 关闭密码功能;**首次设置必须从 127.0.0.1 操作**) |
-| `ttsEnabled` | TTS 听书功能开关(默认 `false`,设为 `true` 显示所有 TTS 相关按钮) |
-| `mlxWhisperBin` | (可选)mlx_whisper 可执行文件路径,默认从 `PATH` 解析 |
+| Field | Meaning |
+| --- | --- |
+| `vault` | Absolute path to the Obsidian vault. |
+| `port` | HTTP port. Defaults to `8765` when config is missing. |
+| `bind` | Bind address. Use `127.0.0.1` for local-only access, or `0.0.0.0` / a LAN IP for LAN reverse-proxy access. Missing config safely falls back to `127.0.0.1`. |
+| `trustedProxies` | Optional reverse-proxy IP/CIDR allowlist. Use this when serving through nginx, Caddy, Synology reverse proxy, Cloudflare Tunnel, or similar. |
+| `password` | Browser access password. Empty string disables password protection. Initial password setup without an existing password is allowed only from direct loopback. |
+| `ttsEnabled` | Shows TTS controls only when explicitly `true`. Default behavior is off. |
+| `mlxWhisperBin` | Optional path to the `mlx_whisper` executable. |
 
-> 安全说明:`/api/auth` 同 IP 60s 内 ≤10 次失败;成功认证签发 HMAC token(基于 `.session-secret` 文件,文件丢失会强制所有人重登);改密码会轮换 secret,所有旧 token 失效。
+Do not commit `config.json`. It may contain a vault path, password, private LAN
+details, or deployment-specific proxy settings.
 
-### 当前部署约定
+## Start Locally
 
-- 本地项目目录:`/Users/lhx/.openclaw/workspace/obsidian-reader`
-- macOS LaunchAgent:`~/Library/LaunchAgents/com.obsidian-reader.plist`
-- 服务端口:`8765`
-- 公网/移动端访问:**务必在前面套一个 TLS 终止的反向代理**(nginx / Caddy / 群晖反代等),默认地址形如 `https://your-host.example`。本服务自身只跑明文 HTTP,设计为绑定到 `127.0.0.1` 或局域网地址、由反代回源,**不要把明文端口直接暴露公网**。反代部署时记得设置 `trustedProxies` 为反代的局域网 IP。
-- Android 客户端策略:使用独立原生 Android WebView wrapper 加载上面的 **HTTPS** 服务 URL,不改动现有 Web 前端/后端。走 HTTPS 时无需任何 cleartext 配置。
-
-### 启动
+Run:
 
 ```bash
 ./serve.sh
 ```
 
-访问 `http://localhost:<PORT>` 即可。
+`serve.sh` performs one scan first, then starts `server.js`.
 
-### macOS 开机自启(可选)
+Open:
 
-创建 `~/Library/LaunchAgents/com.obsidian-reader.plist`:
+```text
+http://localhost:8765
+```
+
+If your config uses a different port, use that port instead.
+
+## macOS LaunchAgent
+
+The current local deployment uses a LaunchAgent:
+
+```text
+~/Library/LaunchAgents/com.obsidian-reader.plist
+```
+
+Useful commands:
+
+```bash
+launchctl print gui/$(id -u)/com.obsidian-reader
+launchctl kickstart -k gui/$(id -u)/com.obsidian-reader
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
+```
+
+A minimal LaunchAgent plist:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key>
-    <string>com.obsidian-reader</string>
-    <key>WorkingDirectory</key>
-    <string>/path/to/obsidian-reader</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>serve.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/obsidian-reader-launchd.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/obsidian-reader-launchd.err</string>
+  <key>Label</key>
+  <string>com.obsidian-reader</string>
+  <key>WorkingDirectory</key>
+  <string>/path/to/obsidian-reader</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/path/to/obsidian-reader/serve.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/obsidian-reader-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/obsidian-reader-launchd.err</string>
 </dict>
 </plist>
 ```
 
+## HTTP API
+
+Main routes:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /` | Serves the SPA. |
+| `GET /data/catalog.json` | Serves the generated article catalog with ETag/gzip support. |
+| `GET /vault/*` | Proxies raw vault files after path-containment checks. |
+| `POST /api/auth` | Password login. |
+| `GET /api/check-auth` | Auth status. |
+| `GET /api/config` | Current vault path and TTS setting. |
+| `POST /api/config` | Update vault path and/or TTS setting. |
+| `POST /api/password` | Change or disable the access password. |
+| `POST /api/rescan` | Regenerate the catalog. |
+| `GET /api/read-state` | Read/unread state with timestamps and tombstones. |
+| `POST /api/read-state/add` | Mark one or more articles as read. |
+| `POST /api/read-state/remove` | Mark one or more articles as unread. |
+| `POST /api/note` | Add highlight/note data to a note file. |
+| `GET /api/notes` | Load article notes. |
+| `POST /api/tts` | Generate TTS audio and WebVTT subtitles when TTS is enabled. |
+| `POST /api/transcribe` | Start MP3 transcription. |
+| `POST /api/transcribe/status` | Poll transcription status. |
+| `POST /api/align` | Align VTT cues to article paragraphs. |
+| `GET /api/events` | Server-Sent Events for catalog updates. |
+
+`/api/rescan` is POST-only because it has side effects.
+
+## Scanner
+
+`scan.py` scans the configured vault, extracts titles and metadata, and writes
+`dist/data/catalog.json`.
+
+Run it manually:
+
 ```bash
-# 加载
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
-
-# 重启
-launchctl kickstart -k gui/$(id -u)/com.obsidian-reader
-
-# 停止
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
+/usr/bin/python3 scan.py
 ```
 
-## Android 客户端
+The scanner preserves the top-level grouping used by the app:
 
-知识库阅读器的 Android 端推荐做成**独立原生 WebView 壳**:
+- `Raw`
+- `Wiki`
+
+The generated catalog is ignored by git.
+
+## TTS And MP3 Following
+
+TTS is disabled unless `ttsEnabled` is explicitly `true`.
+
+When enabled, the app can:
+
+- Generate speech with Edge TTS.
+- Cache generated audio in `/tmp/obsidian-reader-tts`.
+- Highlight the current paragraph while audio plays.
+- Start playback from selected text.
+- Transcribe embedded MP3 files with `mlx-whisper`.
+- Align VTT cues to article paragraphs using `align.py`.
+- Use local semantic embeddings through `sentence-transformers` when available.
+- Fall back to character/LCS alignment when semantic alignment is unavailable.
+
+Alignment cache compatibility is controlled by `align-version.json`. The current
+version is `14`.
+
+## Notes, Highlights, And Editing
+
+The frontend supports:
+
+- Text highlights and notes.
+- Jumping from note links back to the source highlight.
+- Reading-mode checkbox toggles that write back to Markdown.
+- A reading/editing mode toggle for direct Markdown edits.
+- Quote-card sharing through `html2canvas`.
+
+Notes are stored in Markdown note files next to the relevant content according to
+the app's existing note format.
+
+## Security Notes
+
+- The backend serves local files from the configured vault only after resolving
+  paths and checking directory containment.
+- Password sessions use HMAC tokens backed by `.session-secret`.
+- Changing the password rotates the secret and invalidates existing sessions.
+- Failed auth attempts are rate-limited per client IP.
+- Request bodies are capped to avoid unbounded memory use.
+- Server-Sent Events are limited per IP.
+- If serving outside localhost, put the app behind TLS termination and configure
+  `trustedProxies`.
+- Do not expose the plain HTTP port directly to the public internet.
+
+## Reverse Proxy Deployment
+
+Recommended public/mobile setup:
 
 ```text
-Android App
-  └── WebView
-        └── https://your-host.example          (TLS 反向代理)
-              └── http://127.0.0.1:<PORT>       现有 Markdown Reader Web 服务
+browser / mobile app
+  -> HTTPS reverse proxy
+    -> http://127.0.0.1:8765 or http://LAN-IP:8765
+      -> Obsidian Reader
 ```
 
-设计原则:
+Use Caddy, nginx, Synology reverse proxy, Cloudflare Tunnel, Tailscale, or another
+TLS-capable proxy. When the proxy is on another LAN host, bind the app to a LAN
+address or `0.0.0.0` and set `trustedProxies` to the proxy's LAN IP/CIDR.
 
-- Web 版保持不变:继续由 `server.js` + `dist/index.html` 提供浏览器端体验。
-- Android 端只负责 WebView 容器能力:网络权限、Cookie、DOM Storage、下载、返回键、错误页、进度条。
-- 默认服务 URL:`https://your-host.example`(经 TLS 反向代理回源到本服务)。
-- 走 HTTPS 时**不要**开启 cleartext:保持 `android:usesCleartextTraffic="false"`(默认),无需 `network_security_config.xml` 明文白名单。
-- 仅当你明确只在受信任局域网内直连明文端口时,才临时对该内网域名/IP 放行 cleartext;一旦上公网请立即移除。
+## PWA Behavior
 
-最小 WebView 配置要点:
+The service worker caches the app shell only. Dynamic vault content, API
+responses, catalog data, and TTS cache files stay network-only so private content
+does not get pinned in the browser cache unexpectedly.
 
-- `INTERNET` / `ACCESS_NETWORK_STATE` 权限
-- `setJavaScriptEnabled(true)`
-- `setDomStorageEnabled(true)`
-- `CookieManager.setAcceptCookie(true)`
-- 同源链接留在 WebView,外部链接交给系统浏览器
-- Android 返回键优先 `webView.goBack()`
-- `DownloadListener` 转交系统 DownloadManager,并携带 Cookie header
+## Development Checks
 
-## TTS 听书
+Useful syntax checks:
 
-点击文章正文工具栏的 🎧 按钮开启听书模式:
-
-- **Edge TTS** 高品质中文语音(zh-CN-XiaoxiaoNeural)
-- **实时段落高亮** - 语音读到哪里,对应段落自动高亮并滚动跟随
-- **倍速控制** - 0.6x / 0.8x / 1.0x / 1.2x / 1.5x / 2.0x 循环切换
-- **播放/暂停/停止** - 完整播放控制,也可点击高亮段落切换暂停/继续
-- **智能缓存** - 同一篇文章只生成一次音频,后续播放直接使用缓存
-- **一键从选中处听** - 选中文字 → 点击「🎵 从此处听(MP3)」自动开启跟读并跳到对应位置,无需预先手动激活
-
-技术实现:服务端调用 edge-tts 生成 MP3 + WebVTT 字幕文件,前端通过 `<audio>` 播放并解析 VTT 时间戳,用文本对齐算法精确映射到 DOM 段落。
-
-## 语义 Embedding 对齐
-
-MP3 字幕跟读时,当音频是口语讲稿而文章是书面版时(两者用词差异大),传统的字符匹配算法(LCS)只能达到 ~33% 的匹配率。
-
-本项目集成了 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) 语义 embedding 模型,将匹配率提升到 **100%**:
-
-| | LCS 字符匹配 | Embedding 语义匹配 |
-|---|---|---|
-| 口语 vs 书面 | ~33% | **100%** |
-| 段落命中 | 26/50 | **39/50** |
-| 首次加载 | 即时 | ~8s(模型加载) |
-| 后续加载 | 即时 | 即时(缓存) |
-
-### 工作原理
-
-1. 将 VTT 字幕合并为 ~40 字的 chunk
-2. 检测连续短段落(≤30字×≥3段,如引号对话),预合并为虚拟段提高 embedding 质量
-3. 用 embedding 模型编码所有 chunk 和(虚拟)段落
-4. 计算余弦相似度矩阵,贪心单调分配
-5. 对话运内部用字符级相似度拆回各小段
-6. 未映射段落按文字长度比例分配时间,当已映射段时间过多时自动再分配
-7. 结果缓存为 `.align.json`,服务端检测文章/VTT mtime 自动失效重生
-
-### 降级策略
-
-如果未安装 `sentence-transformers` 或 embedding 服务不可用,前端自动降级为 LCS 字符匹配算法,不影响基本功能。
-
-## 书摘分享
-
-选中文章正文中的文字 → 弹出「📋 分享书摘」浮条 → 生成精美书摘卡片:
-
-| 风格 | 特点 |
-|------|------|
-| 🖤 水墨 | 纯白底 + 深色文字,最简洁 |
-| ☕ 暖纸 | 暖色纸张底 + 暖调文字 |
-| 🌙 暗夜 | 深色底 + 浅色文字 |
-| 🌿 青白 | 淡青底 + 自然配色 |
-
-选中文字后浮条提供两个操作:
-- 「🎧 从此处听」- 直接从选中位置开始 TTS 播放
-- 「📋 分享书摘」- 生成精美书摘卡片
-
-支持「📋 复制文字」(带出处)和「💾 保存图片」(html2canvas 3x 高清 PNG)。
-
-## 技术细节
-
-- 认证:随机 session token,cookie 有效期一年
-- `catalog.json` 只存标题 + 路径(不含内容),前端按需 fetch `/vault/*` 拿原始 Markdown
-- 前端用 marked.js 实时渲染,零预编译
-- catalog.json 使用 ETag + `no-cache` 策略(浏览器先验证再决定是否下载),前端额外用 localStorage 做即时缓存
-- Obsidian embed 语法(`![[文件]]`)支持图片、音频、视频三种媒体类型
-- TTS 音频缓存在 `/tmp/obsidian-reader-tts/`,基于文章内容哈希命名,缓存 7 天自动清理
-- TTS 音频服务支持 HTTP Range 请求(206 Partial Content),确保浏览器 seek 到任意位置
-- Vault 音频/视频文件支持 HTTP Range 请求(206 Partial Content),使用 `fs.createReadStream` 流式传输
-- InlineAudio 字幕跟读优先使用语义 Embedding 对齐(bge-small-zh-v1.5),失败时自动降级为 LCS 字符匹配算法(charSim + LCS 滑动窗口)
-- Embedding 对齐将 VTT cue 合并为 ~40 字 chunk，与文章段落计算余弦相似度，贪心单调分配，口语 vs 书面匹配率从 33% 提升到 100%。对话运检测自动将连续短句合并为虚拟段做 embedding，再用 char_similarity 拆回；未映射段落按文字长度比例分配时间，当已映射段时间过多时自动再分配给相邻未映射段
-- LCS 降级算法采用匹配中心定位,miss 时时间比例 cursor 推进防止级联失败,连续 2 次失败自动重锚
-- VTT 解析阶段自动清理零时长 cue、重复文本 cue、Whisper 幻觉
-- 段落时间范围采用比例插值填补 + 连续化处理(无间隙无重叠),二分查找 + 正向锁定防止回跳
-- 笔记系统支持两种存储格式:`## [[title]]` 分节和 `---` 分隔块,向后兼容
-- 主题存储在 localStorage,三种主题:light / dark / eye-care
-- fs.watch 递归监听 vault 目录变更,2 秒防抖后自动 rescan + SSE 推送
-
-## 性能优化
-
-- **gzip 压缩** - 文本响应(JSON/HTML/JS/CSS/VTT 等)自动 gzip,catalog.json 从 364KB 压缩到 ~39KB
-- **ETag 304** - catalog.json 基于 mtime+size 生成 ETag,未变更时返回 304 零传输
-- **localStorage 缓存** - 目录数据缓存到浏览器本地,刷新页面瞬间渲染,后台静默检查更新
-- **SSE 实时推送** - vault 文件变更时通过 Server-Sent Events 自动推送目录更新,无需手动刷新
-
-## 文件结构
-
-```
-Markdown-reader/
-├── config.example.json  - 配置模板
-├── config.json          - 配置(.gitignore 忽略)
-├── scan.py              - vault 扫描器(Python)
-├── align.py             - 语义 Embedding 对齐脚本(Python)
-├── server.js            - HTTP 服务器(Node.js)
-├── serve.sh             - 启动脚本:scan → server
-└── dist/
-    ├── index.html       - SPA 前端
-    └── data/
-        └── catalog.json - 文章目录(自动生成,.gitignore 忽略)
+```bash
+node --check server.js
+node --check dist/sw.js
+/usr/bin/python3 -m py_compile scan.py align.py
 ```
 
-Android wrapper 建议放在独立同级目录,例如:
+The frontend is a single HTML file with inline JavaScript. There is no package
+manager or build command required for normal use.
 
-```
-workspace/
-├── obsidian-reader/          - Web 服务,本仓库
-└── obsidian-reader-android/  - 原生 Android WebView 壳,加载 https://your-host.example
-```
+## Git-Ignored Runtime Files
+
+The following are local runtime artifacts:
+
+- `config.json`
+- `.session-secret`
+- `read-articles.json`
+- `dist/data/catalog.json`
+- `node_modules/`
+- logs and local debug scripts
 
 ## License
 
