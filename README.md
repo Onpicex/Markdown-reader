@@ -1,5 +1,7 @@
 # Obsidian Reader
 
+[中文文档](README.zh-CN.md)
+
 A lightweight web reader for an Obsidian vault. It scans Markdown files into a
 catalog, serves the original vault files through a small Node.js backend, and
 renders them in a single-page browser app.
