@@ -46,7 +46,10 @@ VAULT_PATH = _load_vault_path()
 RAW_DIR = VAULT_PATH / "raw"
 WIKI_DIR = VAULT_PATH / "wiki"
 
-# Files to skip
+# Meta/index filenames treated as course-level noise. These are skipped ONLY
+# when they live inside a subdirectory (e.g. raw/某课程/index.md); the same
+# names sitting directly at a section root (wiki/index.md, wiki/log.md) are
+# real content the user wants to read, so they are kept — see scan_directory.
 SKIP_FILENAMES = {
     "README.md", "readme.md", "index.md", "log.md",
     "lint-report.md", "_metadata.json", "_column-info.json",
@@ -146,7 +149,10 @@ def scan_directory(base_dir: Path, prefix: str) -> List[dict]:
             continue
         if 'assets' in filepath.parts:
             continue
-        if filepath.name in SKIP_FILENAMES:
+        rel_parts = filepath.relative_to(base_dir).parts
+        # Skip meta/index files only when nested in a subdirectory (course-level
+        # noise). Files directly at the section root are always kept.
+        if filepath.name in SKIP_FILENAMES and len(rel_parts) > 1:
             continue
 
         rel_to_base = str(filepath.relative_to(base_dir))
