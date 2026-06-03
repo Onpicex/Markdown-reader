@@ -1146,11 +1146,15 @@ const server = http.createServer(async (req, res) => {
     if (!isAuthed(req)) { jsonReply(res, 401, { error: 'Unauthorized' }); return; }
     const body = await readBody(req);
     try {
-      const { articleId, vttPath } = JSON.parse(body);
+      const { articleId, vttPath, segments } = JSON.parse(body);
       if (!articleId || !vttPath || !config.vault) {
         jsonReply(res, 400, { ok: false, error: 'Missing articleId or vttPath' });
         return;
       }
+      // Frontend-supplied DOM segments (collectArticleSegments) — when present,
+      // align.py uses them verbatim so the count always matches the browser.
+      const domSegments = (Array.isArray(segments) && segments.every(s => typeof s === 'string'))
+        ? segments : null;
       const articleResolved = path.resolve(config.vault, articleId);
       const vttResolved = resolveVaultPath(vttPath);
       if (!isInside(config.vault, articleResolved)) {
@@ -1184,16 +1188,31 @@ const server = http.createServer(async (req, res) => {
             const tr = cached.segTimeRanges || [];
             let tailUnmapped = 0;
             if (tr.length) {
-              const audioEnd = tr[tr.length - 1].end;
+              // audioEnd = end of the last *narrated* (non-null) segment.
+              let audioEnd = null;
+              for (let i = tr.length - 1; i >= 0; i--) { if (tr[i]) { audioEnd = tr[i].end; break; } }
+              // Trailing non-narrated segments are now null (align.py leaves
+              // them unfilled so the follow-along highlight doesn't jump to the
+              // appendix); legacy caches collapsed them to a point at audioEnd.
+              // Both count as expected-unmapped tail so footnote / 划重点
+              // articles aren't judged low-quality and regenerated forever.
               for (let i = tr.length - 1; i >= 0; i--) {
-                if (Math.abs(tr[i].start - audioEnd) < 0.01 && Math.abs(tr[i].end - audioEnd) < 0.01) tailUnmapped++;
-                else break;
+                const r = tr[i];
+                if (!r) { tailUnmapped++; continue; }
+                if (audioEnd !== null && Math.abs(r.start - audioEnd) < 0.01 && Math.abs(r.end - audioEnd) < 0.01) { tailUnmapped++; continue; }
+                break;
               }
             }
             const effSegments = Math.max(1, st.segments - tailUnmapped);
             const hitRatio = (st.segsHit || 0) / effSegments;
             if (cachedVer !== ALIGN_VERSION) {
               console.log(`[align] cache version=${cachedVer} (current=${ALIGN_VERSION}), regenerating: ${cachePath}`);
+            } else if (domSegments && st.segments !== domSegments.length) {
+              // Self-heal: the cache's segment count differs from the browser's
+              // current DOM count (e.g. dist/collectArticleSegments changed, or
+              // an old parse_segments-based cache). Regenerate from DOM segments
+              // so the frontend won't reject it and fall back to LCS.
+              console.log(`[align] cache segCount=${st.segments} != DOM ${domSegments.length}, regenerating: ${cachePath}`);
             } else if (!st.segments || !st.cues) {
               // Legitimately empty article or empty VTT (nothing to align) —
               // version matches, so accept the empty map instead of pointlessly
@@ -1214,15 +1233,27 @@ const server = http.createServer(async (req, res) => {
           }
         } catch (e) { /* cache corrupted or stat failed, regenerate */ }
       }
-      // Run align.py
+      // Run align.py (pass the browser's DOM segments when supplied so the
+      // alignment's segment count matches the frontend exactly).
       const alignScript = path.join(DIR, 'align.py');
-      const proc = spawn(PYTHON, [alignScript, articleResolved, vttResolved, cachePath], {
+      const alignArgs = [alignScript, articleResolved, vttResolved, cachePath];
+      let segTmp = null;
+      if (domSegments) {
+        try {
+          segTmp = path.join(require('os').tmpdir(), `align-segs-${process.pid}-${Date.now()}.json`);
+          fs.writeFileSync(segTmp, JSON.stringify(domSegments));
+          alignArgs.splice(1, 0, '--segments', segTmp);
+        } catch (e) { segTmp = null; }
+      }
+      const cleanupSeg = () => { if (segTmp) { try { fs.unlinkSync(segTmp); } catch (e) {} segTmp = null; } };
+      const proc = spawn(PYTHON, alignArgs, {
         timeout: 60000,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
       });
       let stderr = '';
       proc.stderr.on('data', d => stderr += d.toString());
       proc.on('close', (code) => {
+        cleanupSeg();
         if (code === 0 && fs.existsSync(cachePath)) {
           try {
             const result = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
@@ -1236,6 +1267,7 @@ const server = http.createServer(async (req, res) => {
         }
       });
       proc.on('error', (err) => {
+        cleanupSeg();
         console.error('[align] spawn error:', err.message);
         jsonReply(res, 500, { ok: false, error: 'Spawn failed: ' + err.message });
       });

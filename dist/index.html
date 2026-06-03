@@ -3119,7 +3119,7 @@ const InlineAudio={
         const alignR=await fetch('/api/align',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({articleId:curId,vttPath:btn.dataset.audioRel.replace(/\.[^.]+$/,'.vtt')})
+          body:JSON.stringify({articleId:curId,vttPath:btn.dataset.audioRel.replace(/\.[^.]+$/,'.vtt'),segments:segments.map(s=>s.text)})
         });
         const alignD=await alignR.json();
         if(alignD.ok&&alignD.segMap&&alignD.segTimeRanges){

@@ -65,6 +65,15 @@ def parse_segments(md_text):
     md_body = re.sub(
         r'^\s*!\[\[[^\]]+?\.(mp3|wav|m4a|ogg|mp4|webm)(\|[^\]]*?)?\]\]\s*$',
         '', md_body, flags=re.MULTILINE | re.IGNORECASE)
+    # Remove Obsidian IMAGE wikilink embeds ![[img.jpg]] — the frontend's
+    # convertWikiLinks() turns these into ![](...) → <p><img></p> with empty
+    # textContent, which collectArticleSegments() then skips. align.py must skip
+    # them too, or its segment COUNT won't match the DOM and the frontend
+    # silently rejects this alignment and falls back to LCS (see parse_segments
+    # docstring). Extensions mirror convertWikiLinks (jpg/jpeg/png/gif/webp/svg/bmp).
+    md_body = re.sub(
+        r'^\s*!\[\[[^\]]+?\.(jpg|jpeg|png|gif|webp|svg|bmp)(\|[^\]]*?)?\]\]\s*$',
+        '', md_body, flags=re.MULTILINE | re.IGNORECASE)
 
     blocks = re.split(r'\n\n+', md_body.strip())
 
@@ -772,7 +781,58 @@ def align(segments, cues, model):
             if seg_first[s] is None:
                 seg_first[s] = i
             seg_last[s] = i
-    
+
+    # --- Trim trailing orphan cues before a skipped section ---
+    # When the spoken audio ad-libs transitional content with no article text
+    # (e.g. "好了，讲完了X，咱们再聊一聊Y…") right before a heading/section the
+    # aligner skipped (left unmapped), those cues get absorbed into the PREVIOUS
+    # segment — freezing its highlight for many seconds while the narrator has
+    # already moved on, then flashing past the heading. If such trailing cues
+    # match the current segment poorly AND lean toward the next mapped segment
+    # (the section they introduce), drop them from this segment's audio extent.
+    # The freed time then flows to the skipped heading via the gap-fill below,
+    # so the highlight advances onto the heading as the narrator introduces it.
+    # Bounded: only fires when an unmapped run immediately follows, only trims a
+    # contiguous weak-match tail, and only when the freed span is >= 2s.
+    def _next_mapped(i):
+        for j in range(i + 1, n):
+            if seg_first[j] is not None:
+                return j
+        return None
+    for i in range(n):
+        if seg_first[i] is None:
+            continue
+        if i + 1 >= n or seg_first[i + 1] is not None:
+            continue  # require an unmapped (skipped) segment right after
+        nj = _next_mapped(i)
+        if nj is None:
+            continue
+        first_ci, last_ci = seg_first[i], seg_last[i]
+        this_txt, next_txt = segments[i], segments[nj]
+        new_last = last_ci
+        saw_pure_orphan = False  # a cue matching NEITHER this seg nor the next
+        while new_last > first_ci:
+            ct = cues[new_last]['text']
+            s_this = char_similarity(ct, this_txt)
+            s_next = char_similarity(ct, next_txt)
+            # Stop at the first cue that genuinely belongs to this segment.
+            # A weak self-match that leans toward the upcoming section (or is a
+            # pure orphan matching neither) is transitional → trim it.
+            if s_this < 0.55 and s_next >= s_this:
+                if s_this < 0.15 and s_next < 0.15:
+                    saw_pure_orphan = True
+                new_last -= 1
+            else:
+                break
+        # Only trim when the tail is genuine ad-lib: it must contain a near-pure
+        # orphan cue (a discourse break like "好了/那么…" present in the audio
+        # but in no article segment). This keeps the fix surgical — normal
+        # heading skips and messy Q&A interleaving (where the "orphan" tail is
+        # really mis-attributed real speech) are left untouched. Span >= 2s.
+        if (saw_pure_orphan and new_last < last_ci
+                and (cues[last_ci]['end'] - cues[new_last]['end']) >= 2.0):
+            seg_last[i] = new_last
+
     seg_time_ranges = []
     for i in range(n):
         if seg_first[i] is not None:
@@ -847,13 +907,22 @@ def align(segments, cues, model):
             
             start_t = prev_end
         elif prev_end is not None:
-            # Trailing unmapped run (e.g. ending headings / 划重点 that the
-            # aligner failed to anchor). Use the remaining audio time so the
-            # later clamp-to-audio_end doesn't collapse everything to zero
-            # width. If audio_end <= prev_end (last cue is already at file
-            # end), fall back to 0.5s per segment.
+            # Trailing unmapped run (ending headings / 参考材料 / 知识卡片 /
+            # 划重点 / source links the aligner couldn't anchor).
+            run_len = run_end_idx - run_start_idx + 1
             remaining = max(0, audio_end - prev_end)
-            min_dur = 0.5 * (run_end_idx - run_start_idx + 1)
+            # If essentially no spoken audio remains after the last mapped
+            # segment, this trailing run is non-narrated appendix: there is no
+            # audio to follow. Leave its ranges as None so the follow-along
+            # highlight rests on the last spoken segment instead of leaping to
+            # the bottom of the article when playback reaches the end (the
+            # "快速跳段" bug — all these segments would otherwise collapse to a
+            # single zero-width point at audio_end). A spoken-but-unaligned
+            # outro instead leaves real audio time (cues extend past prev_end)
+            # => remaining is large => fall through and spread it below.
+            if remaining < run_len * 0.8:
+                continue  # entries stay None; skip the distribution block
+            min_dur = 0.5 * run_len
             gap_time = max(remaining, min_dur)
             start_t = prev_end
         elif next_start is not None:
@@ -941,46 +1010,81 @@ def align(segments, cues, model):
                         }
                         cursor += seg_dur
     
-    # Make continuous
+    # Make continuous (skip trailing non-narrated segments left as None)
     for i in range(1, n):
+        if seg_time_ranges[i] is None or seg_time_ranges[i-1] is None:
+            continue
         if seg_time_ranges[i]['start'] > seg_time_ranges[i-1]['end']:
             mid = (seg_time_ranges[i-1]['end'] + seg_time_ranges[i]['start']) / 2
             seg_time_ranges[i-1]['end'] = mid
             seg_time_ranges[i]['start'] = mid
         elif seg_time_ranges[i]['start'] < seg_time_ranges[i-1]['end']:
             seg_time_ranges[i]['start'] = seg_time_ranges[i-1]['end']
-    
-    seg_time_ranges[0]['start'] = 0
-    seg_time_ranges[-1]['end'] = audio_end
-    
+
+    if seg_time_ranges[0] is not None:
+        seg_time_ranges[0]['start'] = 0
+    # Extend the last narrated (non-None) segment to the end of speech so its
+    # highlight persists through any trailing silence; None tail stays None.
+    for _i in range(n - 1, -1, -1):
+        if seg_time_ranges[_i] is not None:
+            seg_time_ranges[_i]['end'] = audio_end
+            break
+
     # Ensure no negative-duration ranges (can happen for trailing non-spoken segments)
     for i in range(n):
+        if seg_time_ranges[i] is None:
+            continue
         if seg_time_ranges[i]['end'] < seg_time_ranges[i]['start']:
             seg_time_ranges[i]['end'] = seg_time_ranges[i]['start']
         # Clamp to audio duration
         seg_time_ranges[i]['start'] = min(seg_time_ranges[i]['start'], audio_end)
         seg_time_ranges[i]['end'] = min(seg_time_ranges[i]['end'], audio_end)
-    
+
     return seg_map, seg_time_ranges
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python3 align.py <article.md> <audio.vtt> [output.json]", file=sys.stderr)
+    # Optional --segments <path>: a JSON array of the EXACT segment texts the
+    # frontend's collectArticleSegments() produced. When supplied we align
+    # against those verbatim instead of re-deriving them with parse_segments().
+    # This guarantees our segment COUNT matches the browser DOM, so the frontend
+    # never rejects the alignment over a count mismatch and falls back to LCS —
+    # eliminating the fragile parse_segments↔marked.parse↔innerText coupling.
+    # parse_segments() remains the fallback (CLI use, or if the file is missing).
+    argv = sys.argv[1:]
+    segments_path = None
+    if '--segments' in argv:
+        si = argv.index('--segments')
+        segments_path = argv[si + 1] if si + 1 < len(argv) else None
+        del argv[si:si + 2]
+
+    if len(argv) < 2:
+        print("Usage: python3 align.py [--segments segs.json] <article.md> <audio.vtt> [output.json]", file=sys.stderr)
         sys.exit(1)
-    
-    article_path = sys.argv[1]
-    vtt_path = sys.argv[2]
-    output_path = sys.argv[3] if len(sys.argv) > 3 else None
-    
+
+    article_path = argv[0]
+    vtt_path = argv[1]
+    output_path = argv[2] if len(argv) > 2 else None
+
     t0 = time.time()
-    
+
     # Read files
     with open(article_path, 'r', encoding='utf-8') as f:
         md_text = f.read()
     with open(vtt_path, 'r', encoding='utf-8') as f:
         vtt_text = f.read()
-    
-    segments = parse_segments(md_text)
+
+    segments = None
+    if segments_path:
+        try:
+            with open(segments_path, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            # Use verbatim (preserve count exactly — frontend already drops empties).
+            if isinstance(loaded, list):
+                segments = [str(x) for x in loaded]
+        except Exception as e:
+            print(f"[align] segments file unreadable, falling back to parse_segments: {e}", file=sys.stderr)
+    if segments is None:
+        segments = parse_segments(md_text)
     cues = parse_vtt(vtt_text)
     
     if not segments or not cues:
