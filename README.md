@@ -77,14 +77,14 @@ Required:
 Optional:
 
 - `edge-tts`, only needed when TTS is enabled.
-- `mlx-whisper`, only needed for local MP3 transcription on Apple Silicon.
+- `mlx-qwen3-asr`, only needed for local MP3 transcription on Apple Silicon (Qwen3-ASR-1.7B, 8bit). Install it in its own venv and point `qwenAsrBin` at the executable.
 - `sentence-transformers`, only needed for semantic alignment fallback quality.
 
 Install optional Python tools only if you use those features:
 
 ```bash
 pip install edge-tts
-pip install mlx-whisper
+pip install mlx-qwen3-asr   # transcription engine; needs ffmpeg
 pip install sentence-transformers
 ```
 
@@ -122,7 +122,8 @@ Fields:
 | `trustedProxies` | Optional reverse-proxy IP/CIDR allowlist. Use this when serving through nginx, Caddy, Synology reverse proxy, Cloudflare Tunnel, or similar. |
 | `password` | Browser access password. Empty string disables password protection. Initial password setup without an existing password is allowed only from direct loopback. |
 | `ttsEnabled` | Shows TTS controls only when explicitly `true`. Default behavior is off. |
-| `mlxWhisperBin` | Optional path to the `mlx_whisper` executable. |
+| `qwenAsrBin` | Path to the `mlx-qwen3-asr` executable (its own venv) used for local MP3 transcription. Defaults to `mlx-qwen3-asr` on PATH. |
+| `mlxWhisperBin` | Legacy/optional path to `mlx_whisper`. No longer used for transcription (replaced by Qwen3-ASR 2026-06-20); kept for reference/fallback. |
 
 Do not commit `config.json`. It may contain a vault path, password, private LAN
 details, or deployment-specific proxy settings.
@@ -245,7 +246,7 @@ When enabled, the app can:
 - Cache generated audio in `/tmp/obsidian-reader-tts`.
 - Highlight the current paragraph while audio plays.
 - Start playback from selected text.
-- Transcribe embedded MP3 files with `mlx-whisper`.
+- Transcribe embedded MP3 files with Qwen3-ASR-1.7B (MLX, 8bit) via `qwen_vtt.py` — hallucination-free, natural clause-level cues.
 - Align VTT cues to article paragraphs using `align.py`.
 - Use local semantic embeddings through `sentence-transformers` when available.
 - Fall back to character/LCS alignment when semantic alignment is unavailable.

@@ -70,14 +70,14 @@ obsidian-reader/
 可选：
 
 - `edge-tts`，仅启用 TTS 时需要。
-- `mlx-whisper`，仅在 Apple Silicon 上进行本地 MP3 转写时需要。
+- `mlx-qwen3-asr`，仅在 Apple Silicon 上进行本地 MP3 转写时需要（Qwen3-ASR-1.7B，8bit）。建议装在独立 venv，并把 `qwenAsrBin` 指向其可执行文件。
 - `sentence-transformers`，仅需要更好的语义对齐质量时使用。
 
 只在使用对应功能时安装这些可选 Python 工具：
 
 ```bash
 pip install edge-tts
-pip install mlx-whisper
+pip install mlx-qwen3-asr   # 转写引擎；需要 ffmpeg
 pip install sentence-transformers
 ```
 
@@ -114,7 +114,8 @@ cp config.example.json config.json
 | `trustedProxies` | 可选的反向代理 IP/CIDR 白名单。通过 nginx、Caddy、群晖反代、Cloudflare Tunnel 等部署时使用。 |
 | `password` | 浏览器访问密码。空字符串会关闭密码保护。没有旧密码时，初次设置密码只允许从 direct loopback 操作。 |
 | `ttsEnabled` | 只有显式设为 `true` 时才显示 TTS 控件。默认关闭。 |
-| `mlxWhisperBin` | 可选的 `mlx_whisper` 可执行文件路径。 |
+| `qwenAsrBin` | 本地 MP3 转写用的 `mlx-qwen3-asr` 可执行文件路径（独立 venv）。缺省取 PATH 上的 `mlx-qwen3-asr`。 |
+| `mlxWhisperBin` | 旧版/可选的 `mlx_whisper` 路径。转写已于 2026-06-20 改用 Qwen3-ASR，本项不再使用，仅作参考/回退。 |
 
 不要提交 `config.json`。它可能包含 Vault 路径、密码、私有局域网信息或部署相关的代理配置。
 
@@ -235,7 +236,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 - 将生成的音频缓存到 `/tmp/obsidian-reader-tts`。
 - 播放时高亮当前段落。
 - 从选中文本处开始播放。
-- 使用 `mlx-whisper` 转写嵌入的 MP3 文件。
+- 使用 Qwen3-ASR-1.7B（MLX，8bit，经 `qwen_vtt.py`）转写嵌入的 MP3 文件——无幻觉、自然分句。
 - 使用 `align.py` 将 VTT cue 对齐到文章段落。
 - 可用时通过 `sentence-transformers` 使用本地语义 embedding。
 - 语义对齐不可用时回退到字符/LCS 对齐。

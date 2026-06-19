@@ -1016,7 +1016,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // /api/transcribe - POST transcribe audio file with mlx-whisper
+  // /api/transcribe - POST transcribe audio file with Qwen3-ASR (qwen_vtt.py)
   // Tracks in-progress transcriptions to avoid duplicate work
   if (pathname === '/api/transcribe' && req.method === 'POST') {
     if (!isAuthed(req)) { jsonReply(res, 401, { error: 'Unauthorized' }); return; }
@@ -1052,33 +1052,22 @@ const server = http.createServer(async (req, res) => {
       // Start transcription asynchronously
       _transcribeInProgress.add(resolved);
       const outputDir = path.dirname(resolved);
-      const mlxBin = config.mlxWhisperBin || process.env.MLX_WHISPER_BIN || 'mlx_whisper';
-      // mlx_whisper writes output as <stem-before-first-dot>.vtt when the
-      // input stem contains dots (e.g. "19.0726丨03 初段-闭环...mp3" →
-      // "19.vtt", clobbering siblings). Use a dot-free temp stem via
-      // --output-name then rename. Same workaround as the central generator
-      // at ~/.hermes/scripts/openclaw_generate_audio_vtt.py.
+      // Transcription engine: Qwen3-ASR-1.7B (MLX, 8bit) via qwen_vtt.py.
+      // 2026-06-20 — replaced mlx_whisper-large-v3-turbo, which hallucinated
+      // fabricated ad text ("请不吝点赞订阅...") and repetition loops on long
+      // Chinese lectures. Qwen is hallucination-free, ~4x faster than fp16,
+      // and qwen_vtt.py does ASR + per-chunk punctuation merge + natural
+      // (clause-level) cue grouping. It transcribes in its own temp dir, so
+      // the dot-free tmp path we hand it is honored verbatim (no mlx
+      // output-name multi-dot truncation); we then rename it to the final .vtt.
+      const qwenAsrBin = config.qwenAsrBin || process.env.QWEN_ASR_BIN || 'mlx-qwen3-asr';
+      const qwenScript = path.join(DIR, 'qwen_vtt.py');
       const tmpStem = 'ocw_vtt_' + crypto.randomBytes(4).toString('hex');
       const tmpVtt = path.join(outputDir, tmpStem + '.vtt');
-      // Anti-hallucination flags, kept in sync with the central VTT generator
-      // at ~/.hermes/scripts/openclaw_generate_audio_vtt.py — see that file
-      // for rationale on each flag. Summary: --word-timestamps + max-words
-      // -per-line splits any 30s mega-cue from repetition loops into short
-      // cues; --hallucination-silence-threshold skips long silence;
-      // --compression-ratio-threshold tightens fallback.
-      const proc = spawn(mlxBin, [
-        '--model', 'mlx-community/whisper-large-v3-turbo',
-        '--language', 'zh',
-        '--output-format', 'vtt',
-        '--condition-on-previous-text', 'False',
-        '--word-timestamps', 'True',
-        '--max-words-per-line', '8',
-        '--hallucination-silence-threshold', '2',
-        '--compression-ratio-threshold', '2.0',
-        '--output-dir', outputDir,
-        '--output-name', tmpStem,
-        resolved
-      ], { timeout: 600000 });
+      const proc = spawn(PYTHON, [qwenScript, resolved, tmpVtt], {
+        timeout: 1200000,
+        env: { ...process.env, QWEN_ASR_BIN: qwenAsrBin }
+      });
       let stderr = '';
       proc.stderr.on('data', d => stderr += d.toString());
       proc.on('close', (code) => {

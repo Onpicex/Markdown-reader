@@ -3,5 +3,6 @@
   "port": 8765,
   "bind": "127.0.0.1",
   "trustedProxies": [],
-  "password": "your-secure-password"
+  "password": "your-secure-password",
+  "qwenAsrBin": "/path/to/qwen3asr-venv/bin/mlx-qwen3-asr"
 }
