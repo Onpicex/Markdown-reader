@@ -16,6 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const url = require('url');
+const os = require('os');
 
 const DIR = __dirname;
 const DIST = path.join(DIR, 'dist');
@@ -44,6 +45,21 @@ function loadConfig() {
 
 function saveConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+}
+
+// Atomic write for user-owned files (vault .md, 笔记.md). These are the only
+// primary copy of the user's data — a crash mid-writeFileSync would truncate
+// the file and iCloud would happily sync the truncated version everywhere.
+// read-state and align caches already use tmp+rename; user data gets it too.
+function atomicWriteSync(p, data) {
+  const tmp = path.join(path.dirname(p), '.ocw-tmp-' + process.pid + '-' + crypto.randomBytes(3).toString('hex'));
+  fs.writeFileSync(tmp, data, 'utf-8');
+  try {
+    fs.renameSync(tmp, p);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw e;
+  }
 }
 
 let config = loadConfig();
@@ -162,6 +178,16 @@ function rotateSessionSecret() {
 }
 const _transcribeInProgress = new Set();
 const _transcribeProcs = new Set();      // live transcription child procs (group-killed on shutdown)
+const TRANSCRIBE_MAX_CONCURRENT = 1;     // one 2GB MLX model at a time
+const TRANSCRIBE_QUEUE_MAX = 16;
+const _transcribeQueue = [];             // [{resolved, opts}] waiting for a slot
+
+function _drainTranscribeQueue() {
+  while (_transcribeQueue.length && _transcribeInProgress.size < TRANSCRIBE_MAX_CONCURRENT) {
+    const next = _transcribeQueue.shift();
+    _startTranscription(next.resolved, next.opts);
+  }
+}
 const _retranscribeFailed = new Set();   // audio paths whose auto re-transcribe failed this run
 const _alignInFlight = new Map();        // cachePath → Promise (dedup concurrent /api/align)
 const _ttsInProgress = new Map(); // baseName → Promise of result
@@ -180,6 +206,11 @@ function _killAlignDaemon(reason) {
   if (!d) return;
   _alignDaemon = null;
   clearTimeout(d.idleTimer);
+  clearTimeout(d.readyTimer);
+  // Reject d.ready too (no-op if already resolved): a daemon that crashes
+  // during startup used to leave awaiting requests hanging the full 300s
+  // ready-timeout before they could fall back to one-shot spawn.
+  try { d._readyReject(new Error('align daemon terminated: ' + reason)); } catch {}
   for (const [, p] of d.pending) { clearTimeout(p.timer); p.reject(new Error('align daemon terminated: ' + reason)); }
   d.pending.clear();
   try { d.proc.kill(); } catch {}
@@ -190,13 +221,17 @@ function _ensureAlignDaemon() {
   const proc = spawn(PYTHON, [path.join(DIR, 'align.py'), '--daemon'], {
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
   });
-  const d = { proc, pending: new Map(), nextId: 1, buf: '', stderr: '', idleTimer: null };
+  const d = { proc, pending: new Map(), nextId: 1, buf: '', stderr: '', idleTimer: null, readyTimer: null };
   d.ready = new Promise((resolve, reject) => { d._readyResolve = resolve; d._readyReject = reject; });
   d.ready.catch(() => {}); // avoid unhandled-rejection if no request is waiting
-  const readyTimer = setTimeout(() => {
+  d.readyTimer = setTimeout(() => {
     d._readyReject(new Error('align daemon start timeout'));
     if (_alignDaemon === d) _killAlignDaemon('start timeout');
   }, 300000);
+  // Async EPIPE: the daemon can die between our liveness check and the write
+  // landing; the resulting 'error' event on stdin has no other listener and
+  // would crash the process. Cleanup is handled by the 'exit' handler.
+  proc.stdin.on('error', () => {});
   proc.stdout.on('data', chunk => {
     d.buf += chunk.toString();
     let nl;
@@ -207,7 +242,7 @@ function _ensureAlignDaemon() {
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
       if (msg.ready) {
-        clearTimeout(readyTimer);
+        clearTimeout(d.readyTimer);
         console.log(`[align] daemon ready (model load ${msg.modelLoadTime}s)`);
         d._readyResolve();
         continue;
@@ -248,7 +283,14 @@ async function _alignViaDaemon(article, vtt, out, segments) {
   await d.ready;
   const msg = await new Promise((resolve, reject) => {
     const id = d.nextId++;
-    const timer = setTimeout(() => { d.pending.delete(id); reject(new Error('align daemon request timeout')); }, 120000);
+    // A request timeout means the daemon is wedged (its loop is strictly
+    // serial), not just slow — kill it so the NEXT request respawns fresh
+    // instead of every article paying the full 120s before falling back.
+    const timer = setTimeout(() => {
+      d.pending.delete(id);
+      reject(new Error('align daemon request timeout'));
+      if (_alignDaemon === d) _killAlignDaemon('request timeout');
+    }, 120000);
     d.pending.set(id, { resolve, reject, timer });
     try {
       d.proc.stdin.write(JSON.stringify({ id, article, vtt, out, segments: segments || null }) + '\n');
@@ -362,12 +404,24 @@ function _startTranscription(resolved, { force = false, auto = false } = {}) {
   const vttPath = resolved.replace(/\.[^.]+$/, '.vtt');
   if (fs.existsSync(vttPath) && !force) return 'cached';
   if (_transcribeInProgress.has(resolved)) return 'in_progress';
+  // Global concurrency cap: each mlx-qwen3-asr loads a ~2GB model and can run
+  // up to 20 min. Opening several untranscribed articles used to stack N MLX
+  // processes trampling GPU/memory; excess jobs now wait in a small FIFO.
+  if (_transcribeInProgress.size >= TRANSCRIBE_MAX_CONCURRENT) {
+    if (_transcribeQueue.some(q => q.resolved === resolved)) return 'queued';
+    if (_transcribeQueue.length >= TRANSCRIBE_QUEUE_MAX) return 'busy';
+    _transcribeQueue.push({ resolved, opts: { force, auto } });
+    return 'queued';
+  }
   _transcribeInProgress.add(resolved);
   const outputDir = path.dirname(resolved);
   const qwenAsrBin = config.qwenAsrBin || process.env.QWEN_ASR_BIN || 'mlx-qwen3-asr';
   const qwenScript = path.join(DIR, 'qwen_vtt.py');
   const tmpStem = 'ocw_vtt_' + crypto.randomBytes(4).toString('hex');
-  const tmpVtt = path.join(outputDir, tmpStem + '.vtt');
+  // Keep the tmp OUT of the vault: if node dies mid-transcription, an orphaned
+  // job that runs to completion writes here (OS-purged tmp) instead of leaving
+  // ocw_vtt_* junk that iCloud would sync to every device.
+  const tmpVtt = path.join(os.tmpdir(), tmpStem + '.vtt');
   // detached → own process group, so the timeout/shutdown kill below reaches
   // the mlx-qwen3-asr GRANDCHILD too. A plain child SIGTERM (the old
   // spawn-option timeout) only killed the qwen_vtt.py middle layer and left
@@ -376,6 +430,7 @@ function _startTranscription(resolved, { force = false, auto = false } = {}) {
     detached: true,
     env: { ...process.env, QWEN_ASR_BIN: qwenAsrBin }
   });
+  proc._ocwTmpVtt = tmpVtt; // for cleanup in _reapChildren
   _transcribeProcs.add(proc);
   const killTimer = setTimeout(() => {
     console.error('[transcribe] timeout (20min), killing process group:', path.basename(resolved));
@@ -397,11 +452,34 @@ function _startTranscription(resolved, { force = false, auto = false } = {}) {
             try {
               const bakDir = path.join(DIR, 'archive', 'vtt-backups', path.basename(outputDir));
               fs.mkdirSync(bakDir, { recursive: true });
-              fs.copyFileSync(vttPath, path.join(bakDir, path.basename(vttPath)));
-            } catch (e) { console.warn('[transcribe] VTT backup failed:', e.message); }
+              // COPYFILE_EXCL: never clobber an existing backup — the first
+              // one is the irreplaceable whisper original; a second force
+              // re-transcription would otherwise overwrite it with qwen output.
+              fs.copyFileSync(vttPath, path.join(bakDir, path.basename(vttPath)), fs.constants.COPYFILE_EXCL);
+            } catch (e) {
+              if (e.code !== 'EEXIST') console.warn('[transcribe] VTT backup failed:', e.message);
+            }
             fs.unlinkSync(vttPath);
           }
-          fs.renameSync(tmpVtt, vttPath);
+          try {
+            fs.renameSync(tmpVtt, vttPath);
+          } catch (e) {
+            if (e.code === 'EXDEV') {
+              // Vault on a different filesystem than tmpdir: stage next to the
+              // target then rename, so the final replace stays atomic (a bare
+              // copyFileSync to vttPath could leave a truncated VTT on crash —
+              // and the old VTT is already gone at this point).
+              const stage = vttPath + '.ocw-stage-' + process.pid;
+              try {
+                fs.copyFileSync(tmpVtt, stage);
+                fs.renameSync(stage, vttPath);
+              } catch (e2) {
+                try { fs.unlinkSync(stage); } catch {}
+                throw e2;
+              }
+              fs.unlinkSync(tmpVtt);
+            } else throw e;
+          }
           console.log(`[transcribe] OK${force ? ' (re-transcribed)' : ''}:`, path.basename(resolved));
         } else {
           console.error('[transcribe] OK exit but tmp vtt missing:', tmpVtt);
@@ -414,6 +492,7 @@ function _startTranscription(resolved, { force = false, auto = false } = {}) {
       if (auto) _retranscribeFailed.add(resolved);
       try { if (fs.existsSync(tmpVtt)) fs.unlinkSync(tmpVtt); } catch {}
     }
+    _drainTranscribeQueue();
   });
   proc.on('error', (err) => {
     clearTimeout(killTimer);
@@ -421,6 +500,7 @@ function _startTranscription(resolved, { force = false, auto = false } = {}) {
     _transcribeInProgress.delete(resolved);
     if (auto) _retranscribeFailed.add(resolved);
     console.error('[transcribe] spawn error:', err.message);
+    _drainTranscribeQueue();
   });
   return 'started';
 }
@@ -433,7 +513,7 @@ function _startTranscription(resolved, { force = false, auto = false } = {}) {
 function _autoRetranscribeLegacy(vttPath) {
   const audio = _findAudioForVtt(vttPath);
   if (!audio || _retranscribeFailed.has(audio)) return false;
-  if (_transcribeInProgress.size > 0) return false; // at most one; retry on a later activation
+  if (_transcribeInProgress.size > 0 || _transcribeQueue.length > 0) return false; // at most one; retry on a later activation
   console.log('[transcribe] legacy VTT queued for re-transcription:', path.basename(vttPath));
   return _startTranscription(audio, { force: true, auto: true }) === 'started';
 }
@@ -444,10 +524,24 @@ function _reapChildren() {
   _killAlignDaemon('server shutdown');
   for (const p of _transcribeProcs) {
     try { process.kill(-p.pid, 'SIGTERM'); } catch {}
+    if (p._ocwTmpVtt) { try { fs.unlinkSync(p._ocwTmpVtt); } catch {} }
   }
 }
 process.on('SIGTERM', () => { _reapChildren(); process.exit(0); });
 process.on('SIGINT', () => { _reapChildren(); process.exit(0); });
+// Last-resort guards. Without these a single async fs error (e.g. an evicted
+// iCloud placeholder emitting EIO on a read stream) took the whole server
+// down. Rejections are logged and survived; a truly uncaught sync exception
+// still exits (state may be corrupt) but reaps children and leaves a trace
+// for launchd to restart on.
+process.on('unhandledRejection', (e) => {
+  console.error('[fatal] unhandled rejection:', (e && e.stack) || e);
+});
+process.on('uncaughtException', (e) => {
+  console.error('[fatal] uncaught exception:', (e && e.stack) || e);
+  _reapChildren();
+  process.exit(1);
+});
 // Rate limiting state
 const _authFails = new Map();     // ip → [timestamp]
 const _sseConnsByIp = new Map();  // ip → count
@@ -550,6 +644,14 @@ function _clientIp(req) {
 }
 function _rateLimitAuth(ip) {
   const now = Date.now();
+  // Lazy sweep: /api/auth is internet-reachable pre-auth, and scanner bots hit
+  // it from one-shot IPs whose entries were otherwise never reclaimed — the
+  // only unbounded, externally-drivable structure in the process.
+  if (_authFails.size > 1000) {
+    for (const [k, v] of _authFails) {
+      if (!v.length || now - v[v.length - 1] > AUTH_RATE_WINDOW_MS) _authFails.delete(k);
+    }
+  }
   const arr = (_authFails.get(ip) || []).filter(t => now - t < AUTH_RATE_WINDOW_MS);
   arr.push(now);
   _authFails.set(ip, arr);
@@ -562,6 +664,21 @@ let _basenameIndex = null;
 let _basenameIndexBuilt = 0;
 const _BASENAME_MIN_REBUILD_MS = 3000;
 const _BASENAME_MAX_AGE_MS = 60000;
+// Memo of successful bare-name resolutions. The full index above expires every
+// 60s and is wholesale-invalidated by ANY watcher event, so during audio
+// playback (bare-wikilink Range requests) the 40ms+ synchronous full-vault
+// walk kept re-running on the hottest path. Memo entries are verified with a
+// cheap existsSync on hit and precisely invalidated by watcher events.
+const _basenameHits = new Map(); // normalized lowercase name → {p, t}
+const _BASENAME_HITS_MAX = 5000;
+// TTL keeps the old index's "at most 60s stale" contract in spirit: precise
+// watcher invalidation is the fast path, but fs.watch can fail to start and
+// iCloud drops fsevents — without an expiry a memo entry whose file still
+// exists (but should no longer be the resolution target) could live forever.
+const _BASENAME_HITS_TTL_MS = 10 * 60 * 1000;
+// macOS FSEvents reports NFD names while URLs usually carry NFC — normalize
+// both sides so precise invalidation actually matches.
+function _basenameKey(name) { return String(name).normalize('NFC').toLowerCase(); }
 
 function buildBasenameIndex() {
   const idx = new Map();
@@ -596,7 +713,12 @@ function resolveVaultPath(rel) {
   if (fs.existsSync(direct)) return direct;
   // Fallback: only for bare filenames (no '/'), look up by basename
   if (rel.includes('/')) return null;
-  const key = rel.toLowerCase();
+  const key = _basenameKey(rel);
+  const memo = _basenameHits.get(key);
+  if (memo) {
+    if (Date.now() - memo.t < _BASENAME_HITS_TTL_MS && fs.existsSync(memo.p)) return memo.p;
+    _basenameHits.delete(key); // expired or moved/deleted — fall through to index
+  }
   const tryLookup = () => {
     const hit = _basenameIndex && _basenameIndex.get(key);
     return hit ? path.resolve(config.vault, hit) : null;
@@ -605,12 +727,15 @@ function resolveVaultPath(rel) {
     buildBasenameIndex();
   }
   let found = tryLookup();
-  if (found) return found;
-  // Second chance: rebuild if cache is older than min-rebuild and retry once
-  // (handles the case where a VTT/file was just created)
-  if (Date.now() - _basenameIndexBuilt > _BASENAME_MIN_REBUILD_MS) {
+  if (!found && Date.now() - _basenameIndexBuilt > _BASENAME_MIN_REBUILD_MS) {
+    // Second chance: rebuild if cache is older than min-rebuild and retry once
+    // (handles the case where a VTT/file was just created)
     buildBasenameIndex();
     found = tryLookup();
+  }
+  if (found) {
+    if (_basenameHits.size >= _BASENAME_HITS_MAX) _basenameHits.clear();
+    _basenameHits.set(key, { p: found, t: Date.now() });
   }
   return found;
 }
@@ -653,6 +778,22 @@ function getMime(filepath) {
   return MIME[path.extname(filepath).toLowerCase()] || 'application/octet-stream';
 }
 
+// Pipe a file read stream into a response with an error handler attached.
+// pipe() does NOT forward source-stream errors; an unhandled 'error' on the
+// ReadStream (evicted iCloud placeholder → EIO, file deleted mid-playback)
+// used to crash the whole process.
+function streamTo(res, filepath, opts) {
+  const stream = fs.createReadStream(filepath, opts);
+  stream.on('error', (e) => {
+    console.error(`[stream] read error: ${filepath}`, e.message);
+    try {
+      if (!res.headersSent) { res.writeHead(500); res.end('Read error'); }
+      else res.destroy();
+    } catch {}
+  });
+  stream.pipe(res);
+}
+
 function serveFile(res, filepath, cacheControl, req, etag) {
   fs.readFile(filepath, (err, data) => {
     if (err) {
@@ -663,12 +804,16 @@ function serveFile(res, filepath, cacheControl, req, etag) {
     const headers = {
       'Content-Type': getMime(filepath),
       'Cache-Control': cacheControl || 'no-cache',
-      'Access-Control-Allow-Origin': '*',
     };
     if (etag) headers['ETag'] = etag;
     // gzip for text-like content >1KB when client accepts it
     const ae = req && req.headers && req.headers['accept-encoding'] || '';
-    if (data.length > 1024 && ae.includes('gzip') && /\.(json|html|js|css|txt|md|xml|svg|vtt)$/i.test(filepath)) {
+    const compressible = /\.(json|html|js|css|txt|md|xml|svg|vtt)$/i.test(filepath);
+    // Representation varies by Accept-Encoding → any shared cache (reverse
+    // proxy) must key on it, or a gzip body could be served to an
+    // identity-only client.
+    if (compressible) headers['Vary'] = 'Accept-Encoding';
+    if (data.length > 1024 && ae.includes('gzip') && compressible) {
       const zlib = require('zlib');
       zlib.gzip(data, (e, compressed) => {
         if (e) { headers['Content-Length'] = data.length; res.writeHead(200, headers); res.end(data); return; }
@@ -691,7 +836,14 @@ function serveFileWithRange(req, res, filepath, cacheControl) {
   try {
     const stat = fs.statSync(filepath);
     const mime = getMime(filepath);
-    const range = req.headers.range;
+    // Media files are archived-once and effectively immutable; a validator lets
+    // the browser reuse its cached copy instead of re-pulling 100MB+ audio over
+    // the WAN on every listen (the old blanket no-store forbade even that).
+    const lastMod = stat.mtime.toUTCString();
+    // Honour If-Range: if the validator doesn't match, fall through to a full
+    // 200 — serving a 206 slice of a changed entity would corrupt playback.
+    const ifRange = req.headers['if-range'];
+    const range = (!ifRange || ifRange === lastMod) ? req.headers.range : null;
     if (range) {
       const m = range.match(/bytes=(\d+)-(\d*)/);
       if (m) {
@@ -712,21 +864,26 @@ function serveFileWithRange(req, res, filepath, cacheControl) {
           'Content-Length': chunkSize,
           'Content-Type': mime,
           'Cache-Control': cacheControl || 'no-cache',
-          'Access-Control-Allow-Origin': '*',
+          'Last-Modified': lastMod,
         });
-        fs.createReadStream(filepath, { start, end }).pipe(res);
+        streamTo(res, filepath, { start, end });
         return;
       }
     }
-    // No Range header - serve full file with Accept-Ranges
+    if (!req.headers.range && req.headers['if-modified-since'] === lastMod) {
+      res.writeHead(304, { 'Last-Modified': lastMod, 'Cache-Control': cacheControl || 'no-cache' });
+      res.end();
+      return;
+    }
+    // No (usable) Range header - serve full file with Accept-Ranges
     res.writeHead(200, {
       'Content-Type': mime,
       'Content-Length': stat.size,
       'Accept-Ranges': 'bytes',
       'Cache-Control': cacheControl || 'no-cache',
-      'Access-Control-Allow-Origin': '*',
+      'Last-Modified': lastMod,
     });
-    fs.createReadStream(filepath).pipe(res);
+    streamTo(res, filepath);
   } catch (e) {
     if (e.code === 'ENOENT') { res.writeHead(404); res.end('Not found'); }
     else { console.error(`Read error: ${filepath}`, e.message); res.writeHead(500); res.end('Read error'); }
@@ -760,7 +917,20 @@ function readBody(req, maxBytes = MAX_BODY_BYTES) {
 }
 
 // ── Request handler ──────────────────────────────────
-const server = http.createServer(async (req, res) => {
+// The async handler is wrapped so ANY throw inside a request (sync fs call
+// outside a try, unexpected state) becomes a logged 500 instead of an
+// unhandledRejection — one bad request must never take the process down.
+const server = http.createServer((req, res) => {
+  _handleRequest(req, res).catch((e) => {
+    console.error('[server] handler error:', (e && e.stack) || e);
+    try {
+      if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('Internal error'); }
+      else res.destroy();
+    } catch {}
+  });
+});
+
+async function _handleRequest(req, res) {
   // Use URL path before any '?' query separator, but for /vault/ paths
   // we need the raw URL since filenames may contain literal '?' characters.
   const rawUrl = req.url;
@@ -860,7 +1030,6 @@ const server = http.createServer(async (req, res) => {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
     });
     res.write('data: connected\n\n');
     sseClients.add(res);
@@ -891,48 +1060,10 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403); res.end('Forbidden');
       return;
     }
-    // Range request support for audio seeking
-    try {
-      const stat = fs.statSync(resolved);
-      const mime = getMime(resolved);
-      const range = req.headers.range;
-      if (range) {
-        const m = range.match(/bytes=(\d+)-(\d*)/);
-        if (m) {
-          const start = parseInt(m[1]);
-          let end = m[2] ? parseInt(m[2]) : stat.size - 1;
-          if (end >= stat.size) end = stat.size - 1; // clamp ranges past EOF so headers match bytes sent
-          // Unsatisfiable: start past EOF, or a reversed range (bytes=100-50)
-          // which would otherwise yield a negative Content-Length.
-          if (start >= stat.size || end < start) {
-            res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
-            res.end();
-            return;
-          }
-          const chunkSize = end - start + 1;
-          res.writeHead(206, {
-            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-            'Accept-Ranges': 'bytes',
-            'Content-Length': chunkSize,
-            'Content-Type': mime,
-            'Cache-Control': 'max-age=604800',
-          });
-          fs.createReadStream(resolved, { start, end }).pipe(res);
-          return;
-        }
-      }
-      // No Range header - serve full file with Accept-Ranges
-      res.writeHead(200, {
-        'Content-Type': mime,
-        'Content-Length': stat.size,
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'max-age=604800',
-      });
-      fs.createReadStream(resolved).pipe(res);
-    } catch (e) {
-      if (e.code === 'ENOENT') { res.writeHead(404); res.end('Not found'); }
-      else { res.writeHead(500); res.end('Read error'); }
-    }
+    // Range-aware serving shared with /vault media. This block used to be a
+    // ~45-line line-for-line copy of serveFileWithRange (bugfixes had to be
+    // pasted twice, and once already were); now it's the same code path.
+    serveFileWithRange(req, res, resolved, 'max-age=604800');
     return;
   }
 
@@ -965,7 +1096,12 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
-    fs.mkdirSync(TTS_CACHE, { recursive: true });
+    try {
+      fs.mkdirSync(TTS_CACHE, { recursive: true });
+    } catch (e) {
+      jsonReply(res, 500, { ok: false, error: 'TTS cache dir unavailable: ' + e.message });
+      return;
+    }
 
     // Dedup: if a generation for this baseName is in flight, await it
     let pending = _ttsInProgress.get(baseName);
@@ -1044,15 +1180,15 @@ const server = http.createServer(async (req, res) => {
           // Insert before the next section
           const insertPos = afterHeader + nextSectionMatch;
           const newContent = existingContent.slice(0, insertPos) + item + existingContent.slice(insertPos);
-          fs.writeFileSync(notePath, newContent, 'utf-8');
+          atomicWriteSync(notePath, newContent);
         } else {
           // Append at end of file
-          fs.appendFileSync(notePath, item, 'utf-8');
+          atomicWriteSync(notePath, existingContent + item);
         }
       } else {
         // New section: append section header + entry
         let newSection = '\n' + sectionHeader + '\n' + item;
-        fs.appendFileSync(notePath, newSection, 'utf-8');
+        atomicWriteSync(notePath, existingContent + newSection);
       }
       jsonReply(res, 200, { ok: true });
     } catch (e) {
@@ -1130,7 +1266,7 @@ const server = http.createServer(async (req, res) => {
             out += '\n---\n\n' + block + '\n';
           }
         }
-        fs.writeFileSync(notePath, out.trim() + '\n', 'utf-8');
+        atomicWriteSync(notePath, out.trim() + '\n');
       }
       jsonReply(res, 200, { ok: true });
     } catch (e) {
@@ -1223,7 +1359,7 @@ const server = http.createServer(async (req, res) => {
           out += '\n---\n\n' + block + '\n';
         }
       }
-      fs.writeFileSync(notePath, out.trim() + '\n', 'utf-8');
+      atomicWriteSync(notePath, out.trim() + '\n');
       jsonReply(res, 200, { ok: true });
     } catch (e) {
       console.error('[note/edit] error:', e.message);
@@ -1344,7 +1480,8 @@ const server = http.createServer(async (req, res) => {
       const status = _startTranscription(resolved, { force: !!force });
       if (status === 'cached') jsonReply(res, 200, { ok: true, vttPath: vttRelative, cached: true });
       else if (status === 'in_progress') jsonReply(res, 200, { ok: true, status: 'in_progress', vttPath: vttRelative });
-      else jsonReply(res, 202, { ok: true, status: 'started', vttPath: vttRelative });
+      else if (status === 'busy') jsonReply(res, 503, { ok: false, error: '转写队列已满，请稍后再试' });
+      else jsonReply(res, 202, { ok: true, status, vttPath: vttRelative }); // 'started' | 'queued'
     } catch (e) {
       console.error('[transcribe] error:', e.message);
       jsonReply(res, 500, { ok: false, error: 'Transcription failed: ' + e.message });
@@ -1369,7 +1506,12 @@ const server = http.createServer(async (req, res) => {
       const vttRelative = vttResolved ? path.relative(config.vault, vttResolved) : null;
       // in_progress FIRST: during a force re-transcription the OLD vtt still
       // exists on disk, so the exists-check alone would falsely report 'done'.
-      if (resolved && _transcribeInProgress.has(resolved)) {
+      // 'queued' is reported distinctly: a queued job can wait up to 20 min
+      // behind the running one, and the frontend must not count that wait
+      // against its own transcription-time budget.
+      if (resolved && _transcribeQueue.some(q => q.resolved === resolved)) {
+        jsonReply(res, 200, { ok: true, status: 'queued' });
+      } else if (resolved && _transcribeInProgress.has(resolved)) {
         jsonReply(res, 200, { ok: true, status: 'in_progress' });
       } else if (vttResolved && fs.existsSync(vttResolved)) {
         jsonReply(res, 200, { ok: true, status: 'done', vttPath: vttRelative });
@@ -1432,6 +1574,18 @@ const server = http.createServer(async (req, res) => {
             try { const now = new Date(); fs.utimesSync(cachePath, now, now); } catch {}
             console.log('[align] mtime stale but content unchanged, keeping cache:', path.basename(cachePath));
             fresh = true;
+          }
+          // hotwords.json feeds apply_hotwords() inside align.py, so an edited
+          // hotword table must invalidate caches too — the typical reason to
+          // add a hotword is "this article aligns badly", which by definition
+          // already has a cache that would otherwise swallow the change.
+          if (fresh) {
+            let hotwordsMtime = 0;
+            try { hotwordsMtime = fs.statSync(path.join(DIR, 'hotwords.json')).mtimeMs; } catch {}
+            if (hotwordsMtime && cacheMtime <= hotwordsMtime) {
+              fresh = false;
+              console.log('[align] hotwords.json newer than cache, regenerating:', path.basename(cachePath));
+            }
           }
           if (!fresh) {
             console.log('[align] cache stale, regenerating:', cachePath);
@@ -1515,7 +1669,7 @@ const server = http.createServer(async (req, res) => {
       const stat = fs.statSync(resolved);
       const etag = '"' + stat.mtimeMs.toString(36) + '-' + stat.size.toString(36) + '"';
       if (req.headers['if-none-match'] === etag) {
-        res.writeHead(304, { 'ETag': etag, 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(304, { 'ETag': etag });
         res.end();
         return;
       }
@@ -1554,7 +1708,7 @@ const server = http.createServer(async (req, res) => {
           jsonReply(res, 400, { ok: false, error: 'Missing content field' });
           return;
         }
-        fs.writeFileSync(directResolved, content, 'utf-8');
+        atomicWriteSync(directResolved, content);
         // Trigger rescan so catalog stays in sync
         scheduleRescan('edit: ' + rel);
         jsonReply(res, 200, { ok: true });
@@ -1570,9 +1724,13 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(404); res.end('Not found');
       return;
     }
-    // Use Range-aware streaming for audio/video (enables seeking)
+    // Use Range-aware streaming for audio/video (enables seeking). Media is
+    // archive-once/immutable — let the browser cache it for a day (validated
+    // via Last-Modified/If-Range in serveFileWithRange) instead of re-pulling
+    // 100MB+ audio over the WAN on every listen. Text (.md etc.) stays
+    // no-store below: it's small and the user edits it.
     if (MEDIA_EXTS.has(path.extname(resolved).toLowerCase())) {
-      serveFileWithRange(req, res, resolved, 'no-store, no-cache, must-revalidate');
+      serveFileWithRange(req, res, resolved, 'private, max-age=86400');
     } else {
       serveFile(res, resolved, 'no-store, no-cache, must-revalidate', req);
     }
@@ -1580,15 +1738,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   // /api/rescan → regenerate catalog (POST only: it has a side effect + spawns
-  // a process, so it must not be triggerable by a GET/prefetch)
+  // a process, so it must not be triggerable by a GET/prefetch). Routed through
+  // doRescan so it shares the in-flight mutex + changed-only broadcast.
   if (pathname === '/api/rescan' && req.method === 'POST') {
-    execFile(PYTHON, [path.join(DIR, 'scan.py')], { timeout: 30000 }, (err, stdout, stderr) => {
-      const ok = !err;
-      if (ok) {
-        for (const client of sseClients) {
-          try { client.write(`data: catalog-updated\n\n`); } catch {}
-        }
-      }
+    doRescan('api-rescan', (ok, stdout, stderr) => {
       jsonReply(res, ok ? 200 : 500, { ok, stdout: (stdout || '').slice(-500), stderr: (stderr || '').slice(-500) });
     });
     return;
@@ -1701,18 +1854,30 @@ const server = http.createServer(async (req, res) => {
   fs.stat(resolved, (err, stat) => {
     if (err || !stat.isFile()) {
       if (!path.extname(pathname)) {
-        serveFile(res, path.join(DIST, 'index.html'), 'no-cache');
+        serveFile(res, path.join(DIST, 'index.html'), 'no-cache', req);
       } else {
         res.writeHead(404); res.end('Not found');
       }
       return;
     }
-    // sw.js / manifest must not be pinned in the HTTP cache, or service-worker
-    // updates (and the shell precache list) would lag by up to an hour.
-    const cc = /(?:^|\/)(sw\.js|manifest\.webmanifest)$/.test(resolved) ? 'no-cache' : 'max-age=3600';
-    serveFile(res, resolved, cc);
+    // index.html / sw.js / manifest must not be pinned in the HTTP cache:
+    // both the SW's stale-while-revalidate refetch and its install-time
+    // precache read through the HTTP cache, so a max-age'd index.html made
+    // fresh deploys lag up to an hour and could even bake the OLD shell into
+    // a NEW SW cache version ("修了没生效"). no-cache + the ETag below means
+    // revalidation is a cheap 304, not a full re-download.
+    const cc = /(?:^|\/)(index\.html|sw\.js|manifest\.webmanifest)$/.test(resolved) ? 'no-cache' : 'max-age=3600';
+    const etag = '"' + stat.mtimeMs.toString(36) + '-' + stat.size.toString(36) + '"';
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { 'ETag': etag, 'Cache-Control': cc, 'Vary': 'Accept-Encoding' });
+      res.end();
+      return;
+    }
+    // NB: passing req enables the gzip branch in serveFile — the old call left
+    // it undefined, so dist files (196KB index.html) always went out raw.
+    serveFile(res, resolved, cc, req, etag);
   });
-});
+}
 
 // ── SSE: push catalog updates to connected browsers ──
 const sseClients = new Set();
@@ -1721,16 +1886,56 @@ const sseClients = new Set();
 let _rescanTimer = null;
 let _watcher = null;
 
-function doRescan(reason) {
+// In-flight mutex: watcher debounce, the 5-min safety net, /api/rescan and
+// startup are mutually unaware entry points; two concurrent scan.py runs used
+// to race on catalog.json. While one runs, further requests coalesce into a
+// single queued follow-up.
+let _scanRunning = false;
+let _scanPending = null; // { reason, cbs: [] }
+const CATALOG_PATH = path.join(DIST, 'data', 'catalog.json');
+
+function doRescan(reason, cb) {
+  if (_scanRunning) {
+    if (!_scanPending) _scanPending = { reason, cbs: [] };
+    else _scanPending.reason = reason;
+    if (cb) _scanPending.cbs.push(cb);
+    return;
+  }
+  _scanRunning = true;
+  let beforeMtime = 0;
+  try { beforeMtime = fs.statSync(CATALOG_PATH).mtimeMs; } catch {}
   execFile(PYTHON, [path.join(DIR, 'scan.py')], { timeout: 30000 }, (err, stdout, stderr) => {
-    if (err) {
-      console.error(`[auto-rescan] failed (${reason}):`, stderr || err.message);
-    } else {
-      console.log(`[auto-rescan] OK (${reason}) - catalog updated`);
-      // Notify all connected browsers
+    _scanRunning = false;
+    const ok = !err;
+    // Broadcast only when the catalog actually changed (scan.py skips the
+    // write when content is identical, so mtime is a reliable signal). The
+    // old unconditional broadcast made every client refetch ~900KB and
+    // rebuild the whole sidebar every 5 minutes, 24/7.
+    // The mtime compare runs even on error: a scan killed by the 30s timeout
+    // AFTER its atomic os.replace still updated the catalog, and the next
+    // (successful) run would report "unchanged" — clients would never hear
+    // about the change otherwise.
+    let afterMtime = 0;
+    try { afterMtime = fs.statSync(CATALOG_PATH).mtimeMs; } catch {}
+    const changed = afterMtime !== beforeMtime;
+    if (changed) {
       for (const client of sseClients) {
         try { client.write(`data: catalog-updated\n\n`); } catch {}
       }
+    }
+    if (!ok) {
+      console.error(`[auto-rescan] failed (${reason})${changed ? ' [catalog did change — broadcast sent]' : ''}:`, stderr || err.message);
+    } else {
+      console.log(`[auto-rescan] OK (${reason}) - catalog ${changed ? 'updated' : 'unchanged'}`);
+    }
+    if (cb) { try { cb(ok, stdout, stderr); } catch {} }
+    if (_scanPending) {
+      const p = _scanPending;
+      _scanPending = null;
+      const chained = p.cbs.length
+        ? (ok2, so, se) => { for (const f of p.cbs) { try { f(ok2, so, se); } catch {} } }
+        : undefined;
+      doRescan(p.reason, chained);
     }
   });
 }
@@ -1748,11 +1953,18 @@ let _safetyRescan = null;
 function startWatching(vaultPath) {
   if (_watcher) { try { _watcher.close(); } catch {} }
   if (_safetyRescan) clearInterval(_safetyRescan);
+  // Called on startup and on vault change — memoized absolute paths would
+  // otherwise keep pointing (validly!) into the OLD vault after a switch.
+  _basenameHits.clear();
   if (!vaultPath) return;
   try {
     _watcher = fs.watch(vaultPath, { recursive: true }, (eventType, filename) => {
       if (!filename) return;
       invalidateBasenameIndex();
+      // Precise memo invalidation only — wholesale-clearing the hit memo here
+      // would defeat it exactly when iCloud fires event storms during sync.
+      // Stale entries additionally self-heal via the existsSync check on hit.
+      _basenameHits.delete(_basenameKey(path.basename(String(filename))));
       const ext = path.extname(filename).toLowerCase();
       const isDir = !ext;
       if (ext === '.md' || isDir) {
