@@ -236,12 +236,27 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 - 将生成的音频缓存到 `/tmp/obsidian-reader-tts`。
 - 播放时高亮当前段落。
 - 从选中文本处开始播放。
-- 使用 Qwen3-ASR-1.7B（MLX，8bit，经 `qwen_vtt.py`）转写嵌入的 MP3 文件——无幻觉、自然分句。
+- 使用 Qwen3-ASR-1.7B（MLX，8bit，经 `qwen_vtt.py`）转写嵌入的 MP3 文件——无幻觉、自然分句。新 VTT 带 `NOTE transcriber` 来源标记。
 - 使用 `align.py` 将 VTT cue 对齐到文章段落。
 - 可用时通过 `sentence-transformers` 使用本地语义 embedding。
-- 语义对齐不可用时回退到字符/LCS 对齐。
+- 语义对齐不可用时回退到字符/LCS 对齐（降级会以 toast 提示）。
 
-对齐缓存兼容性由 `align-version.json` 控制。当前版本是 `14`。
+MP3 嵌入渲染为主题化自定义播放器（播放/拖动进度/倍速持久化、跨次访问断点续播、
+锁屏 Media Session 元数据）。跟读进行中：手动滚动会暂停自动跟随（浮动按钮可恢复）、
+点任意段落可跳播到该段、高亮段内有细进度线指示句级位置。
+
+对齐性能：服务端维护常驻的 `align.py --daemon`（embedding 模型只加载一次；闲置
+10 分钟自动退出；失败自动回退单发 spawn），模型从本地 HuggingFace 缓存离线加载。
+热对齐一篇文章耗时远低于 1 秒。同一文章的并发请求会去重，缓存文件原子写入。
+
+旧引擎（Qwen 切换前）产出的 VTT 通过缺失来源标记识别；在这类文章上开启跟读会
+惰性排队后台重转（旧 VTT 先备份到 `archive/vtt-backups/`），并显示手动重转按钮。
+可选的 `hotwords.json`（模板见 `hotwords.example.json`）按课程修复高频 ASR 同音
+错字；`align.py` 的匹配额外做了拼音归一化，同音错字也能对齐。
+
+对齐缓存兼容性由 `align-version.json` 控制，两侧每次请求都现读（bump 后无需重启
+服务）。mtime 变了但内容哈希不变时（如 iCloud 重同步）缓存照常采信；已确认的低
+质量结果会被接受，不再每次打开都重算。
 
 ## 笔记、高亮和编辑
 

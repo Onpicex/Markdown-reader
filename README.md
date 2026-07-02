@@ -246,13 +246,35 @@ When enabled, the app can:
 - Cache generated audio in `/tmp/obsidian-reader-tts`.
 - Highlight the current paragraph while audio plays.
 - Start playback from selected text.
-- Transcribe embedded MP3 files with Qwen3-ASR-1.7B (MLX, 8bit) via `qwen_vtt.py` — hallucination-free, natural clause-level cues.
+- Transcribe embedded MP3 files with Qwen3-ASR-1.7B (MLX, 8bit) via `qwen_vtt.py` — hallucination-free, natural clause-level cues. New VTTs carry a `NOTE transcriber` provenance line.
 - Align VTT cues to article paragraphs using `align.py`.
 - Use local semantic embeddings through `sentence-transformers` when available.
-- Fall back to character/LCS alignment when semantic alignment is unavailable.
+- Fall back to character/LCS alignment when semantic alignment is unavailable (the downgrade is surfaced as a toast).
 
-Alignment cache compatibility is controlled by `align-version.json`. The current
-version is `14`.
+MP3 embeds render a themed custom player (play/scrub/speed with persistence,
+cross-visit resume, lock-screen Media Session metadata). During follow-along,
+manual scrolling pauses auto-follow (a floating pill restores it), tapping a
+paragraph seeks playback there, and a thin progress line tracks position inside
+the highlighted paragraph.
+
+Alignment performance: the server keeps a warm `align.py --daemon` (embedding
+model loaded once; killed after 10 min idle; automatic fallback to one-shot
+spawn), and the model loads offline from the local HuggingFace cache. Warm
+alignment of an article takes well under a second. Concurrent requests for the
+same article are deduplicated, and the cache file is written atomically.
+
+Legacy VTTs (produced before the Qwen engine switch) are detected by the missing
+provenance line; opening follow-along on one lazily queues a background
+re-transcription (the old VTT is backed up under `archive/vtt-backups/` first)
+and exposes a manual re-transcribe button. Optional `hotwords.json` (see
+`hotwords.example.json`) fixes recurring ASR homophones per course; matching in
+`align.py` is additionally pinyin-normalized so homophone errors still align.
+
+Alignment cache compatibility is controlled by `align-version.json`, re-read on
+every request by BOTH sides (no server restart needed after a bump). A cache is
+also kept when file mtimes change but content hashes match (e.g. iCloud
+re-syncs), and a confirmed low-quality result is accepted rather than
+regenerated on every open.
 
 ## Notes, Highlights, And Editing
 
@@ -323,6 +345,8 @@ The following are local runtime artifacts:
 - `read-articles.json`
 - `dist/data/catalog.json`
 - `node_modules/`
+- `hotwords.json` (per-course ASR fixes; template in `hotwords.example.json`)
+- `archive/vtt-backups/` (pre-retranscription VTT backups)
 - logs and local debug scripts
 
 ## License
