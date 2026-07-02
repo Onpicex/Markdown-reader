@@ -106,6 +106,12 @@ html{overflow-x:hidden}
 
 /* ── Main ────────────────────────────────────────────── */
 .main{flex:1;display:flex;flex-direction:column;min-width:0;height:100vh}
+/* Dynamic viewport height: in a plain mobile browser tab 100vh is the LARGE
+   viewport (toolbar collapsed), but our inner-scroll layout never collapses
+   the toolbar — so the bottom ~44-80px (side footer buttons, back-to-top) sat
+   permanently behind it. dvh tracks the real visible height; the 100vh lines
+   above remain as the fallback for older browsers. */
+@supports (height:100dvh){body,.app,.side,.main{height:100dvh}}
 .toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 24px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0;transition:background var(--tr);gap:8px}
 .tb-l{display:flex;align-items:center;gap:8px;min-width:0;flex-shrink:1;overflow:hidden}
 .tb-r{display:flex;align-items:center;gap:10px;flex-shrink:0}
@@ -720,49 +726,51 @@ function _pushReadState(action,id,ts){
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,ts})
-  }).catch(e=>console.warn('[read-state] '+action+' failed:',e));
+  }).then(r=>{if(r&&r.status===401)handle401(r);})
+    .catch(e=>console.warn('[read-state] '+action+' failed:',e));
 }
 // Initial sync: pull server reads+tombstones, merge per-id LWW both ways, push
 // any locally-newer entries back. Called from init() after catalog is available.
+// Resolves to whether the merge actually CHANGED local state — init() uses
+// that to skip the (previously unconditional) third full sidebar re-render.
 async function syncReadState(){
   try{
     const r=await fetch('/api/read-state',{cache:'no-store'});
+    if(r.status===401){handle401(r);return false;}
     if(!r.ok)return false;
     const data=await r.json();
     if(!data||!data.ok)return false;
     _loadReadState();
     const sr=data.reads||{}, st=data.tombstones||{};
+    let changed=false;
     // server → local: pull when local is MISSING the entry (a read is a read
     // even at ts=0, e.g. legacy-migrated marks) or the server's ts is newer.
     // A bare `v > local` dropped ts=0 reads on a fresh device (0 > 0 = false),
     // which looked like a reset after switching origin (http:8765 → https:8766).
-    for(const k in sr){ const v=Number(sr[k])||0; if(!_reads.has(k) || v>_reads.get(k)) _reads.set(k,v); }
-    for(const k in st){ const v=Number(st[k])||0; if(!_tombs.has(k) || v>_tombs.get(k)) _tombs.set(k,v); }
+    for(const k in sr){ const v=Number(sr[k])||0; if(!_reads.has(k) || v>_reads.get(k)){ _reads.set(k,v); changed=true; } }
+    for(const k in st){ const v=Number(st[k])||0; if(!_tombs.has(k) || v>_tombs.get(k)){ _tombs.set(k,v); changed=true; } }
     // local newer than server → push back (each with its own ts)
     const pushReads=[],pushTombs=[];
     // local → server: push when server is MISSING the entry or local ts is newer
     // (mirrors the pull side so a ts=0 read on a device also reaches the server).
     for(const [k,v] of _reads){ if(!(k in sr) || v>(Number(sr[k])||0)) pushReads.push(k); }
     for(const [k,v] of _tombs){ if(!(k in st) || v>(Number(st[k])||0)) pushTombs.push(k); }
-    _saveReadState();
+    if(changed)_saveReadState();
     pushReads.forEach(k=>_pushReadState('add',k,_reads.get(k)));
     pushTombs.forEach(k=>_pushReadState('remove',k,_tombs.get(k)));
-    return true;
+    return changed;
   }catch(e){console.warn('[read-state] sync failed:',e);return false;}
 }
 function toggleRead(id){
   if(isRead(id)){unmarkRead(id)}else{markRead(id)}
   updateReadUI(id);
 }
-// Drop ids that no longer exist in the catalog (renamed/deleted articles).
-function pruneReadSet(catalog){
-  if(!catalog||!catalog.articles)return;
-  const valid = new Set(catalog.articles.map(a=>a.id));
-  _loadReadState();
-  let removed = 0;
-  for(const id of [..._reads.keys()]){ if(!valid.has(id)){ _reads.delete(id); _tombs.delete(id); removed++; } }
-  if(removed){ _saveReadState(); console.log('[read] pruned',removed,'orphan ids'); }
-}
+// NOTE: there used to be a pruneReadSet() here that dropped ids missing from
+// the catalog. It was cross-session dead weight: it never propagated deletes
+// to the server, so syncReadState() pulled every "pruned" id right back — and
+// propagating them would risk mass-deleting real marks whenever an iCloud
+// hiccup produced a temporarily-incomplete catalog. Orphan ids are harmless
+// (33 reads total today), so the mechanism was removed rather than "fixed".
 function updateReadUI(id){
   const rd=isRead(id);
   // Update sidebar item
@@ -792,29 +800,8 @@ function safeHTML(html){
 }
 function hsh(s){let v=0;for(let i=0;i<s.length;i++){v=((v<<5)-v)+s.charCodeAt(i);v|=0}return'h'+Math.abs(v)}
 
-// ── Image fallback: _assets → same directory ────────
-function imgFallback(img){
-  const src=img.getAttribute('src')||'';
-  // If currently trying _assets path, fall back to same-directory path
-  if(src.includes('_assets/')||src.includes('_assets%2F')){
-    const parts=src.split(/_assets[\/\/]|_assets%2[Ff]/);
-    if(parts.length===2){
-      // Rebuild: remove the _assets/basename_assets/ segment, keep the filename
-      const dirPart=src.replace(/[^\/]+_assets[\/\/][^\/]*$/,'').replace(/[^\/]+_assets%2[Ff][^\/]*$/,'');
-      // Get the directory before _assets folder
-      const m=src.match(/^(.*\/vault\/.*\/)([^\/]+)_assets[\/\/](.+)$/)||src.match(/^(.*\/vault\/.*\/)([^\/]+)_assets%2[Ff](.+)$/);
-      if(m){
-        img.src=m[1]+m[3];
-        return;
-      }
-    }
-  }
-  // Hide broken image
-  img.style.display='none';
-}
-
 // ── Configure marked ─────────────────────────────────
-marked.setOptions({ gfm:true, breaks:true, smartypants:false });
+marked.setOptions({ gfm:true, breaks:true });
 
 // ── Wiki link title → article id lookup ─────────────
 let _wikiIndex=null;
@@ -948,6 +935,18 @@ async function checkAuth(){
   }
 }
 
+// Session expired mid-use (password change rotates the server secret and
+// invalidates every other device's cookie). Without this, every fetch failure
+// surfaced as a misleading「文章加载失败」with no way back in short of a lucky
+// manual reload.
+function handle401(r){
+  if(!r||r.status!==401)return false;
+  loginOverlay.style.display='flex';
+  app.style.display='none';
+  loginPw.focus();
+  return true;
+}
+
 async function doLogin(){
   loginErr.textContent='';
   const pw=loginPw.value.trim();
@@ -956,6 +955,20 @@ async function doLogin(){
     const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
     const d=await r.json();
     if(d.ok){
+      // Re-login after an in-session expiry.
+      if(inited){
+        if(editMode&&editDirty){
+          // Session died mid-edit: reloading would destroy the unsaved text
+          // the saveEdit 401 path deliberately kept alive. Surface the editor
+          // again — the cookie is fresh, so hitting save now succeeds.
+          loginOverlay.style.display='none';
+          app.style.display='flex';
+          showToast('已重新登录，请再次保存');
+          return;
+        }
+        // Otherwise reload for a clean slate (fresh SSE, catalog, read-state).
+        location.reload();return;
+      }
       loginOverlay.style.display='none';
       app.style.display='flex';
       init();
@@ -971,13 +984,24 @@ loginPw.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
 // ── Load catalog ─────────────────────────────────────
 let inited=false;
 let catalogEtag=localStorage.getItem('catalog-etag')||'';
+// Per-TAB signature of the catalog content this tab last rendered. Deliberately
+// in-memory: localStorage is shared across tabs, so using it as the "did I
+// already render this" baseline froze background tabs whenever a foreground
+// tab had already written the newer catalog to the shared cache.
+let _renderedCatalogSig=null;
 
 function applyCatalog(data){
   C=data;
   _wikiIndex=null;
-  pruneReadSet(C);
-  renderSidebar(C,document.querySelector('.sf')?.value||'');
-  restoreSidebarState();
+  // Keep the CURRENT search filter across re-renders. The old code read
+  // `.sf` — a selector matching nothing (the search box is #search) — so any
+  // catalog refresh mid-search rebuilt the sidebar unfiltered while the box
+  // still showed the query. While a filter is active, skip the collapse-state
+  // restore too (mirrors the search handler): restoring saved collapse state
+  // over a filtered render would fold the matches away.
+  const _filter=search.value.trim();
+  renderSidebar(C,_filter);
+  if(!_filter)restoreSidebarState();
   const ftSpan=sft.querySelector('span');
   ftSpan.textContent=C.totalArticles+' 篇 · '+C.categories.length+' 分类';
   ws.textContent='';
@@ -991,6 +1015,7 @@ async function fetchCatalog(){
     const headers={};
     if(catalogEtag)headers['If-None-Match']=catalogEtag;
     const r=await fetch('data/catalog.json',{headers});
+    if(handle401(r))return null;
     if(r.status===304){console.log('[catalog] 304 not modified');return null;}
     const etag=r.headers.get('etag')||'';
     const data=await r.json();
@@ -1009,6 +1034,11 @@ async function fetchCatalog(){
           console.warn('[catalog] cache skip: payload',s.length,'> 2MB');
           localStorage.removeItem('catalog-cache');
         }
+        // New ETag but content identical to what THIS TAB already rendered
+        // (e.g. catalog.json rewritten without real changes): nothing to
+        // re-render — skip the full sidebar rebuild.
+        if(s===_renderedCatalogSig && C){console.log('[catalog] content unchanged, skip re-render');return null;}
+        _renderedCatalogSig=s; // caller renders this content next
       }catch(e){console.warn('[catalog] cache write failed:',e);}
     }
     return data;
@@ -1027,16 +1057,18 @@ async function init(){
     // 1. Instant render from localStorage cache
     const cached=localStorage.getItem('catalog-cache');
     if(cached){
-      try{applyCatalog(JSON.parse(cached));console.log('[catalog] rendered from cache');}catch(e){localStorage.removeItem('catalog-cache');localStorage.removeItem('catalog-etag');}
+      try{applyCatalog(JSON.parse(cached));_renderedCatalogSig=cached;console.log('[catalog] rendered from cache');}catch(e){localStorage.removeItem('catalog-cache');localStorage.removeItem('catalog-etag');}
     }
     // 2. Fetch latest (ETag — 304 if unchanged)
     const data=await fetchCatalog();
     if(data){applyCatalog(data);console.log('[catalog] updated from server, '+data.totalArticles+' articles');}
     else if(!cached){snav.innerHTML='<div class="ld">加载失败</div>';return;}
-    // 3. After server read-state sync resolves, re-render sidebar so newly-pulled marks show.
+    // 3. Re-render only when the read-state sync actually pulled changes —
+    // the common no-change startup used to pay a third full sidebar rebuild.
     if(await readSyncP && C){
-      renderSidebar(C,document.querySelector('.sf')?.value||'');
-      restoreSidebarState();
+      const _f=search.value.trim();
+      renderSidebar(C,_f);
+      if(!_f)restoreSidebarState();
       // Also refresh any read-toggle button currently on screen.
       if(curId)updateReadUI(curId);
     }
@@ -1240,14 +1272,32 @@ async function _doToggleCheckbox(articleId,cbIndex,newChecked){
 }
 
 // ── Load article (fetch raw markdown, render in browser) ─
+// Generation token: two rapid navigations used to race — the SLOWER fetch
+// (iCloud-evicted file can block for seconds) resolved last and clobbered the
+// article the user actually opened.
+let _loadToken=0;
 async function loadArticle(id, highlightText){
+  // Unsaved edits guard: navigating away (sidebar click, back button, wiki
+  // link) silently destroyed the editor and everything typed in it.
+  if(!confirmDiscardEdit()){
+    if(curId)location.hash=encodeURIComponent(curId); // undo a back/forward hash change
+    return false;
+  }
+  // The editor DOM (if any) is destroyed by the innerHTML below no matter how
+  // this load ends — clear edit state NOW, or a failed/superseded load leaves
+  // ghost dirty flags prompting to "discard" an editor that no longer exists.
+  editMode=false;
+  editDirty=false;
+  const _tok=++_loadToken;
   if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];TTS._segTimeRanges=null;TTS._hlEl=null;}
   if(typeof InlineAudio!=='undefined'){for(const k of InlineAudio.active.keys())InlineAudio.deactivate(k);}
   ct.innerHTML='<div class="ld"><div class="sp"></div><div>加载中...</div></div>';
   try{
     const r=await fetch('/vault/'+id.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
+    if(r.status===401){handle401(r);return false;}
     if(!r.ok)throw new Error(r.status);
     const mdText=await r.text();
+    if(_tok!==_loadToken)return false; // superseded by a newer navigation — don't clobber it
     const {meta,body}=stripFrontmatter(mdText);
     const artInfo=C?C.articles.find(a=>a.id===id):null;
     const title=artInfo?artInfo.title:(meta.title||id.split('/').pop().replace('.md',''));
@@ -1258,7 +1308,6 @@ async function loadArticle(id, highlightText){
     if(_leadH1&&_leadH1[1].trim()===String(title).trim())docBody=docBody.slice(_leadH1[0].length);
     const catName=artInfo?artInfo.category:'';
     curId=id;
-    editMode=false;
     location.hash=encodeURIComponent(id);
     // Build clickable breadcrumb
     bc.innerHTML='';
@@ -1305,9 +1354,6 @@ async function loadArticle(id, highlightText){
     const tags=am.tags;
     if(tags&&Array.isArray(tags))for(const t of tags)metaHtml+='<span class="tag">'+h(String(t))+'</span>';
     const wikiBody=convertWikiLinks(docBody);
-    // Resolve relative image paths to vault directory (with _assets fallback)
-    const artDir='/vault/'+id.replace(/\/[^\/]+$/,'').split('/').map(s=>encodeURIComponent(s)).join('/')+'/';
-    const artBasename=id.split('/').pop().replace(/\.md$/i,'');
     const renderer=new marked.Renderer();
     renderer.image=function({href,title,text}){
       let src=href||'';
@@ -1320,14 +1366,20 @@ async function loadArticle(id, highlightText){
       const t=title?' title="'+ha(title)+'"':'';
       return '<img src="'+src+'" alt="'+ha(alt)+'"'+t+' loading="lazy">';
     };
-    renderer.link=function({href,title,text}){
-      const url=href||'';
-      const t=title?' title="'+ha(title)+'"':'';
+    renderer.link=function(token){
+      const url=token.href||'';
+      const t=token.title?' title="'+ha(token.title)+'"':'';
+      // marked v13+: token.text is the RAW markdown of the label — using it
+      // directly rendered `[**bold**](url)` with literal asterisks. The
+      // inline child tokens must be parsed; DOMPurify sanitizes downstream.
+      let label;
+      try{label=this.parser.parseInline(token.tokens);}
+      catch(e){label=h(token.text||'');}
       // External links (http/https) open in new tab
       if(url.match(/^https?:\/\//i)){
-        return '<a href="'+ha(url)+'"'+t+' target="_blank" rel="noopener noreferrer">'+text+'</a>';
+        return '<a href="'+ha(url)+'"'+t+' target="_blank" rel="noopener noreferrer">'+label+'</a>';
       }
-      return '<a href="'+ha(url)+'"'+t+'>'+text+'</a>';
+      return '<a href="'+ha(url)+'"'+t+'>'+label+'</a>';
     };
     const htmlContent=marked.parse(wikiBody,{renderer});
     const rd=isRead(id);
@@ -1426,9 +1478,14 @@ async function loadArticle(id, highlightText){
     }
     if(hl){ setTimeout(()=>scrollToHighlight(hl),500); }
     closeSide();
+    return true;
   }catch(e){
+    // A SLOW failing request must not clobber the article a newer navigation
+    // already rendered — same token rule as the success path.
+    if(_tok!==_loadToken)return false;
     ct.innerHTML='<div class="ld">文章加载失败</div>';
     console.error(e);
+    return false;
   }
 }
 
@@ -1701,18 +1758,24 @@ ov.addEventListener('click',closeSide);
   document.addEventListener('touchcancel',()=>{tracking=false},{passive:true});
 })();
 
-// ── Logo click → go home ─────────────────────────────
-document.querySelector('.side-brand').addEventListener('click',function(){
+// ── Go home (welcome view) — shared by logo click and back-to-empty-hash ──
+function goHome(){
+  ++_loadToken; // invalidate any in-flight loadArticle so it can't "bounce back"
   if(typeof TTS!=='undefined')TTS.stop();
   curId=null;
   editMode=false;
+  editDirty=false;
   if(typeof editToggle!=='undefined')editToggle.style.display='none';
-  location.hash='';
   bc.innerHTML='';
   document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
   ct.innerHTML='<div class="welcome" id="wc"><div class="ico"><img src="/icon-192.png" alt="logo"></div><h2>知识库阅读器</h2><p>你的个人知识库，沉浸式阅读体验。<br>从左侧选择一篇文章开始阅读。</p><div class="stats" id="ws"></div></div>';
   if(C){document.getElementById('ws').innerHTML='<div class="st"><span class="num">'+C.totalArticles+'</span><span class="lbl">篇文章</span></div><div class="st"><span class="num">'+C.categories.length+'</span><span class="lbl">个分类</span></div>';}
   closeSide();
+}
+document.querySelector('.side-brand').addEventListener('click',function(){
+  if(!confirmDiscardEdit())return;
+  location.hash='';
+  goHome();
 });
 
 // ── Back to top ──────────────────────────────────────
@@ -1740,6 +1803,13 @@ window.addEventListener('hashchange',function(){
   const raw=location.hash.slice(1);
   const id=raw?decodeURIComponent(raw.split('?')[0]):'';
   if(id&&id!==curId)loadArticle(id);
+  else if(!id&&curId){
+    // Back button reached the empty-hash (home) history entry. Doing nothing
+    // here left the article on screen — "the back button is broken" — and on
+    // Android PWA the NEXT back press exited the app past the welcome screen.
+    if(!confirmDiscardEdit()){location.hash=encodeURIComponent(curId);return;}
+    goHome();
+  }
 });
 
 // ── Restore prefs ────────────────────────────────────
@@ -3501,7 +3571,11 @@ const InlineAudio={
     // (long lectures); the old 3-min client cutoff reported a fake「转录超时」
     // while the job was still running fine.
     return new Promise((resolve)=>{
-      const startedAt=Date.now();
+      // startedAt is reset while the job reports 'queued': the server runs
+      // transcriptions one at a time, so a job can wait up to ~20 min behind
+      // another lecture before its own 20-minute run even begins — the 21-min
+      // budget must only count RUNNING time or queued jobs get a fake timeout.
+      let startedAt=Date.now();
       const maxMs=21*60*1000;
       const poll=async()=>{
         const elapsed=Date.now()-startedAt;
@@ -3510,8 +3584,6 @@ const InlineAudio={
           resolve(null);
           return;
         }
-        const mm=Math.floor(elapsed/60000),ss=Math.floor(elapsed%60000/1000);
-        btn.textContent='🎙 转写中 '+mm+':'+String(ss).padStart(2,'0')+'（可先离开）';
         try{
           const sr=await fetch('/api/transcribe/status',{
             method:'POST',
@@ -3527,6 +3599,12 @@ const InlineAudio={
             showToast('❌ 转录失败',3000);
             resolve(null);
             return;
+          }else if(sd.status==='queued'){
+            startedAt=Date.now();
+            btn.textContent='🎙 排队中…（可先离开）';
+          }else{
+            const mm=Math.floor(elapsed/60000),ss=Math.floor(elapsed%60000/1000);
+            btn.textContent='🎙 转写中 '+mm+':'+String(ss).padStart(2,'0')+'（可先离开）';
           }
         }catch(e){}
         setTimeout(poll,2000);
@@ -4075,19 +4153,28 @@ ct.addEventListener('click',function(e){
         return;
       }
       showToast('🎙 已开始重新转写（约几分钟），完成后重开跟读生效',3500);
+      // Deadline covers the RUNNING time only: with the server's global
+      // one-at-a-time transcription queue, a job can sit 'queued' behind a
+      // 20-minute lecture first — that wait must not consume the budget.
+      let chkDeadline=Date.now()+22*60*1000;
       const chk=setInterval(async()=>{
         if(!rBtn.isConnected){clearInterval(chk);return;}
+        if(Date.now()>chkDeadline){clearInterval(chk);rBtn.disabled=false;rBtn.textContent='↻ 重转字幕';return;}
         try{
           const sr=await fetch('/api/transcribe/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audioPath:audioRel})});
           const sd=await sr.json();
-          if(sd.status==='done'){
+          if(sd.status==='queued'){
+            chkDeadline=Date.now()+22*60*1000;
+            rBtn.textContent='🎙 排队中…';
+          }else if(sd.status==='in_progress'){
+            rBtn.textContent='🎙 重转中…';
+          }else if(sd.status==='done'){
             clearInterval(chk);
             rBtn.textContent='✅ 已重转';
             showToast('✅ 字幕重转完成，重新开启跟读即可生效',3500);
           }
         }catch(err){}
       },5000);
-      setTimeout(()=>clearInterval(chk),22*60*1000);
     }).catch(()=>{
       rBtn.disabled=false;rBtn.textContent='↻ 重转字幕';
     });
@@ -4098,11 +4185,22 @@ ct.addEventListener('click',function(e){
 // ── Edit mode (read/edit toggle) ────────────────────
 const editToggle=$('editToggle');
 let editMode=false;
+let editDirty=false; // unsaved changes in the editor
 let rawMarkdown=''; // raw markdown of current article
+
+// True = safe to proceed (not editing, nothing typed, or user agreed to
+// discard). Every path that destroys the editor DOM must pass through this —
+// sidebar/wiki-link/nav navigation, back button, logo, cancel, toggle.
+function confirmDiscardEdit(){
+  if(!(editMode&&editDirty))return true;
+  return confirm('有未保存的修改，确定放弃吗？');
+}
 
 editToggle.addEventListener('click',function(){
   if(!curId)return;
   if(editMode){
+    if(!confirmDiscardEdit())return;
+    editDirty=false;
     exitEditMode(false);
   }else{
     enterEditMode();
@@ -4132,6 +4230,7 @@ async function enterEditMode(){
   // Fetch raw markdown
   try{
     const r=await fetch('/vault/'+curId.split('/').map(s=>encodeURIComponent(s)).join('/'),{cache:'no-store'});
+    if(r.status===401){handle401(r);return;}
     if(!r.ok)throw new Error(r.status);
     rawMarkdown=await r.text();
   }catch(e){
@@ -4139,6 +4238,7 @@ async function enterEditMode(){
     return;
   }
   editMode=true;
+  editDirty=false;
   editToggle.innerHTML='<img src="/icon-192.png" alt="阅读" style="width:16px;height:16px;border-radius:3px;vertical-align:middle">';
   editToggle.title='阅读';
   editToggle.classList.add('active');
@@ -4186,11 +4286,15 @@ async function enterEditMode(){
     editArea.style.height='auto';
     editArea.style.height=Math.max(400,editArea.scrollHeight)+'px';
   }
-  editArea.addEventListener('input',autoResize);
+  editArea.addEventListener('input',()=>{editDirty=true;autoResize();});
   setTimeout(autoResize,0);
   // Save button
   $('editSave').addEventListener('click',()=>saveEdit());
-  $('editCancel').addEventListener('click',()=>exitEditMode(false));
+  $('editCancel').addEventListener('click',()=>{
+    if(!confirmDiscardEdit())return; // cancel is a one-click discard too
+    editDirty=false;
+    exitEditMode(false);
+  });
 }
 
 async function saveEdit(){
@@ -4203,12 +4307,14 @@ async function saveEdit(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({content})
     });
+    if(handle401(r))return; // session expired — keep the editor (and the text) alive
     const d=await r.json();
     if(!d.ok){
       showToast('保存失败: '+(d.error||''));
       return;
     }
     // Success — exit edit mode and reload article
+    editDirty=false;
     exitEditMode(true);
   }catch(e){
     showToast('保存请求失败');
@@ -4217,13 +4323,16 @@ async function saveEdit(){
 
 function exitEditMode(){
   editMode=false;
+  editDirty=false;
   editToggle.textContent='📝';
   editToggle.title='编辑';
   editToggle.classList.remove('active');
   const savedScroll=_editScrollTop;
   if(curId){
-    loadArticle(curId).then(()=>{
-      setTimeout(()=>{ ct.scrollTop=savedScroll; },50);
+    loadArticle(curId).then((ok)=>{
+      // Only restore scroll if THIS load completed as the current one — a
+      // superseded load must not push its scroll onto another article.
+      if(ok)setTimeout(()=>{ ct.scrollTop=savedScroll; },50);
     });
   }
 }
@@ -4236,6 +4345,11 @@ document.addEventListener('keydown',function(e){
       saveEdit();
     }
   }
+});
+
+// Refresh/close/system-back past the page: warn while there are unsaved edits.
+window.addEventListener('beforeunload',function(e){
+  if(editMode&&editDirty){e.preventDefault();e.returnValue='';}
 });
 
 // ── Start: check auth first ──────────────────────────
