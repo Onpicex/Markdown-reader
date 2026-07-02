@@ -253,9 +253,8 @@ When enabled, the app can:
 
 MP3 embeds render a themed custom player (play/scrub/speed with persistence,
 cross-visit resume, lock-screen Media Session metadata). During follow-along,
-manual scrolling pauses auto-follow (a floating pill restores it), tapping a
-paragraph seeks playback there, and a thin progress line tracks position inside
-the highlighted paragraph.
+manual scrolling pauses auto-follow (a floating pill restores it), and tapping a
+paragraph seeks playback there.
 
 Alignment performance: the server keeps a warm `align.py --daemon` (embedding
 model loaded once; killed after 10 min idle; automatic fallback to one-shot

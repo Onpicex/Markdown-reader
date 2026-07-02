@@ -197,9 +197,6 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .ia-fill::after{content:'';position:absolute;right:-5px;top:-3px;width:10px;height:10px;border-radius:50%;background:var(--gold)}
 .ia-follow-pill{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(24px + env(safe-area-inset-bottom));z-index:60;padding:8px 16px;border-radius:20px;border:1px solid var(--gold);background:var(--bg);color:var(--gold);font-size:13px;font-family:var(--font);cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.15)}
 .ia-follow-pill:hover{background:var(--gold-faint)}
-.inline-audio-hl{position:relative}
-.inline-audio-hl::after{content:'';position:absolute;left:0;bottom:-2px;height:2px;width:var(--ia-progress,0%);background:var(--gold);border-radius:1px}
-@media (prefers-reduced-motion: no-preference){.inline-audio-hl::after{transition:width .3s linear}}
 .video-embed{margin:1.2em 0}
 .video-embed video{max-width:100%;border-radius:8px}
 
@@ -3380,19 +3377,10 @@ const InlineAudio={
         if(sIdx>=0&&sIdx!==curIdx){
           curIdx=sIdx;
           // Clear old highlights from this session
-          document.querySelectorAll('.inline-audio-hl').forEach(el=>{el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused');el.style.removeProperty('--ia-progress');});
+          document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
           if(segments[sIdx]&&segments[sIdx].el){
             segments[sIdx].el.classList.add('tts-highlight','inline-audio-hl');
             _iaAutoScroll(segments[sIdx].el);
-          }
-        }
-        // Sentence-level progress line inside the highlighted paragraph
-        // (time-driven, so it stays honest even on error-ridden legacy VTTs)
-        if(curIdx>=0&&segments[curIdx]&&segments[curIdx].el){
-          const pr=segTimeRanges[curIdx];
-          if(pr&&pr.end>pr.start){
-            const pct=Math.max(0,Math.min(100,(t-pr.start)/(pr.end-pr.start)*100));
-            segments[curIdx].el.style.setProperty('--ia-progress',pct.toFixed(1)+'%');
           }
         }
       };
@@ -3436,7 +3424,7 @@ const InlineAudio={
     s.audio.removeEventListener('ended',s.onEnded);
     s.audio.removeEventListener('play',s.onPlay);
     s.audio.removeEventListener('pause',s.onPause);
-    document.querySelectorAll('.inline-audio-hl').forEach(el=>{el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused');el.style.removeProperty('--ia-progress');});
+    document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
     s.btn.textContent='🔤 字幕跟读';
     s.btn.classList.remove('active');
     this.active.delete(audioSrc);

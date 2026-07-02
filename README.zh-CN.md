@@ -243,7 +243,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.obsidian-reader.plist
 
 MP3 嵌入渲染为主题化自定义播放器（播放/拖动进度/倍速持久化、跨次访问断点续播、
 锁屏 Media Session 元数据）。跟读进行中：手动滚动会暂停自动跟随（浮动按钮可恢复）、
-点任意段落可跳播到该段、高亮段内有细进度线指示句级位置。
+点任意段落可跳播到该段。
 
 对齐性能：服务端维护常驻的 `align.py --daemon`（embedding 模型只加载一次；闲置
 10 分钟自动退出；失败自动回退单发 spawn），模型从本地 HuggingFace 缓存离线加载。
