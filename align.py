@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Semantic alignment: match VTT cues to article paragraphs using embedding similarity.
-Usage: python3 align.py <article_path> <vtt_path> [output_json_path]
+Usage: python3 align.py [--segments segs.json] <article_path> <vtt_path> [output_json_path]
+       python3 align.py --daemon    (JSON-lines server on stdin/stdout; model loaded once)
 Outputs JSON: { segMap: number[], segTimeRanges: {start,end}[], stats: {...} }
 """
-import sys, json, re, time, os
+import sys, json, re, time, os, hashlib
 from collections import Counter
 import numpy as np
 
@@ -21,11 +22,126 @@ def _load_align_version():
 
 ALIGN_VERSION = _load_align_version()
 
+def _load_hotwords():
+    """Optional hotwords.json next to this script: course-scoped ASR homophone
+    fixes applied to the raw VTT text before parsing (e.g. \u96c4\u5f02\u2192\u718a\u9038).
+    { "global": [["wrong","right"],...], "courses": {"<dir-name>": [[..],..]} }
+    The real file is gitignored (contains course names); see hotwords.example.json."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hotwords.json')
+        with open(p, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def apply_hotwords(vtt_text, vtt_path):
+    hw = _load_hotwords()
+    pairs = list(hw.get('global') or [])
+    for course, extra in (hw.get('courses') or {}).items():
+        if course and course in (vtt_path or ''):
+            pairs.extend(extra or [])
+    for pair in pairs:
+        try:
+            wrong, right = pair[0], pair[1]
+            if wrong and isinstance(wrong, str) and isinstance(right, str):
+                vtt_text = vtt_text.replace(wrong, right)
+        except Exception:
+            continue
+    return vtt_text
+
 def norm_text(t):
     """Strip whitespace and punctuation for comparison."""
     t = re.sub(r'[\s\u3000\u00A0]', '', t)
     t = re.sub(r'[^\u4e00-\u9fff\u3400-\u4dbfa-zA-Z0-9]', '', t)
     return t.lower()
+
+# \u2500\u2500 Pinyin-normalized similarity (ASR homophone robustness) \u2500\u2500
+# Whisper-era VTTs are full of same-sound-wrong-char errors (\u96c4\u5f02/\u718a\u9038,
+# \u5f17\u5b66/\u4f5b\u5b66) that score 0.0 on any character-level comparison. Normalizing
+# both sides to toneless pinyin recovers the match (xiong yi == xiong yi).
+# pypinyin is optional \u2014 without it everything degrades to char-only exactly
+# as before.
+try:
+    from pypinyin import lazy_pinyin as _lazy_pinyin
+except Exception:
+    _lazy_pinyin = None
+
+_pinyin_cache = {}
+
+_CN_DIGITS = '\u96f6\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d'
+
+def _digits_to_cn(m):
+    """Read small integers the way a narrator would (50\u2192\u4e94\u5341, 100\u2192\u4e00\u767e) so
+    '\u4f5b\u5b6650\u8bb2' pinyin-matches spoken '\u4f5b\u5b66\u4e94\u5341\u8bb2'. Longer runs fall back to
+    digit-by-digit reading (2026\u2192\u4e8c\u96f6\u4e8c\u516d), matching common narration."""
+    s = m.group(0)
+    n = int(s)
+    if 10 <= n <= 99:
+        tens, ones = divmod(n, 10)
+        out = (_CN_DIGITS[tens] if tens > 1 else '') + '\u5341'
+        return out + (_CN_DIGITS[ones] if ones else '')
+    if 100 <= n <= 999 and n % 100 == 0:
+        return _CN_DIGITS[n // 100] + '\u767e'
+    return ''.join(_CN_DIGITS[int(c)] for c in s)
+
+def _pinyin_tokens(t):
+    """norm_text \u2192 tuple of toneless pinyin syllables (non-CJK chars kept as-is)."""
+    nt = norm_text(t)
+    if not nt:
+        return ()
+    hit = _pinyin_cache.get(nt)
+    if hit is not None:
+        return hit
+    toks = tuple(_lazy_pinyin(re.sub(r'\d+', _digits_to_cn, nt)))
+    if len(_pinyin_cache) > 20000:
+        _pinyin_cache.clear()
+    _pinyin_cache[nt] = toks
+    return toks
+
+def pinyin_similarity(a, b):
+    """Token-bag overlap on toneless pinyin (mirrors char_similarity's
+    Counter-bag semantics). 0.0 when pypinyin is unavailable."""
+    if _lazy_pinyin is None:
+        return 0.0
+    ta, tb = _pinyin_tokens(a), _pinyin_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    if len(ta) > 200 or len(tb) > 200:
+        ta, tb = ta[:200], tb[:200]
+    shorter, longer = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    if len(longer) > len(shorter) * 3:
+        cs = Counter(shorter)
+        best = 0.0
+        step = max(1, len(shorter) // 2)
+        for start in range(0, len(longer) - len(shorter) + 1, step):
+            window = longer[start:start + len(shorter) + len(shorter) // 2]
+            common = sum((cs & Counter(window)).values())
+            best = max(best, common / max(len(shorter), 1))
+        return best
+    ca, cb = Counter(ta), Counter(tb)
+    common = sum((ca & cb).values())
+    return 2 * common / (len(ta) + len(tb))
+
+def _pinyin_substr(needle, hay):
+    """Pinyin-level substring test for very short targets (headings, \u5bf9\u8bdd lines):
+    '\u96c4\u9038' contains '\u718a\u9038' at the sound level."""
+    if _lazy_pinyin is None:
+        return False
+    tn, th = _pinyin_tokens(needle), _pinyin_tokens(hay)
+    if not tn or not th or len(tn) > len(th):
+        return False
+    for i in range(len(th) - len(tn) + 1):
+        if th[i:i + len(tn)] == tn:
+            return True
+    return False
+
+def char_similarity_ex(a, b):
+    """max(char-bag, pinyin-bag) similarity \u2014 the drop-in used by all the
+    hard-threshold passes so ASR homophones stop scoring zero."""
+    cs = char_similarity(a, b)
+    if cs >= 0.9:
+        return cs
+    return max(cs, pinyin_similarity(a, b))
 
 def _strip_md_emphasis(s):
     """Strip markdown emphasis/links so text matches the rendered DOM textContent.
@@ -182,13 +298,53 @@ def parse_vtt(vtt_text):
     # Drop low-unique-char repetition cues anywhere in the file (whisper-turbo
     # failure mode: "划划划划划划划划" repeating for many short cues when
     # transcribing music or stuck on a loop). These match nothing in the
-    # article and pollute embedding alignment. Threshold: normalized text has
-    # ≤2 unique chars and length ≥4 → drop. Keep dialogue like "嗯嗯" (len 2)
-    # and short legit phrases by requiring len≥4.
-    cues = [
-        c for c in cues
-        if not (len(set(norm_text(c['text']))) <= 2 and len(norm_text(c['text'])) >= 4)
-    ]
+    # article and pollute embedding alignment. Thresholds: a single char
+    # repeated ≥4 times, or ≤2 unique chars at length ≥6 — length 4-5 with two
+    # unique chars is spared because that's exactly the shape of legitimate
+    # AABB reduplication words ("分分合合", "开开心心").
+    def _is_low_unique(c):
+        nt = norm_text(c['text'])
+        u = len(set(nt))
+        return (u == 1 and len(nt) >= 4) or (u <= 2 and len(nt) >= 6)
+    cues = [c for c in cues if not _is_low_unique(c)]
+    # Collapse cross-cue repetition loops (whisper failure mode the in-cue
+    # trimmer below can't see): runs of consecutive cues drawn from ≤2 distinct
+    # normalized texts, e.g. A/B/A/B/A… or A/A/A…, each text ≥2 chars, run ≥4
+    # cues. Real speech never repeats the same clause verbatim 4+ times in a
+    # row; keep the first occurrence of each distinct text and drop the rest,
+    # so the aligner sees the content once instead of a 10-second echo wall.
+    if len(cues) >= 4:
+        cleaned = []
+        i = 0
+        while i < len(cues):
+            ni = norm_text(cues[i]['text'])
+            if len(ni) < 2:
+                cleaned.append(cues[i])
+                i += 1
+                continue
+            j = i
+            texts = set()
+            while j < len(cues):
+                nj = norm_text(cues[j]['text'])
+                if len(nj) < 2:
+                    break
+                if nj not in texts and len(texts) >= 2:
+                    break
+                texts.add(nj)
+                j += 1
+            run_len = j - i
+            if run_len >= 4 and len(texts) <= 2:
+                kept_texts = set()
+                for k in range(i, j):
+                    nk = norm_text(cues[k]['text'])
+                    if nk not in kept_texts:
+                        kept_texts.add(nk)
+                        cleaned.append(cues[k])
+                i = j
+            else:
+                cleaned.append(cues[i])
+                i += 1
+        cues = cleaned
     # Trim within-cue repetition-loop hallucinations (mlx-whisper-turbo's
     # signature failure mode). Example real case: a 30s cue whose tail is
     # "一百一百一百…" × 78. Without trimming, align.py expands the
@@ -303,7 +459,10 @@ def merge_cues(cues, target_len=40):
     return chunks, indices
 
 def char_similarity(a, b):
-    """Character-level similarity using longest common subsequence ratio."""
+    """Character-level similarity via multiset (Counter) overlap of normalized
+    chars — NOT an LCS; order is ignored, repeats can't inflate the score.
+    Zero-robust to ASR homophones by construction (弗学 vs 佛学 → 0.2); use
+    char_similarity_ex() anywhere ASR text meets article text."""
     a = norm_text(a)
     b = norm_text(b)
     if not a or not b:
@@ -331,6 +490,23 @@ def char_similarity(a, b):
     common = sum((ca & cb).values())
     return 2 * common / (len(a) + len(b))
 
+
+_PANEL_HEADERS = ('今日得到', '今日思考', '划重点', '参考材料', '知识卡片',
+                  '本周留言精选', '留言精选', '用户留言', '思考题', '推荐阅读',
+                  '本讲小结', '课后思考', '延伸阅读')
+
+def _is_panel_header(text):
+    """得到-style appendix panel headings (今日得到/划重点/…). When unmapped
+    these are UI chrome the narrator never reads — they must not receive
+    interpolated audio time (a 0.2-2s flash-highlight with an auto-scroll)."""
+    nt = norm_text(text)
+    if not nt or len(nt) > 12:
+        return False
+    for h in _PANEL_HEADERS:
+        nh = norm_text(h)
+        if nt == nh or nt.startswith(nh) or nt.endswith(nh):
+            return True
+    return False
 
 def detect_dialogue_runs(segments, max_char=30):
     """Detect runs of consecutive short segments (dialogue lines).
@@ -526,9 +702,9 @@ def align(segments, cues, model):
                 # any Chinese cue text. Require strict substring match instead.
                 nt = norm_text(target)
                 if 0 < len(nt) <= 5:
-                    cs = 1.0 if nt in norm_text(cue_text) else 0.0
+                    cs = 1.0 if (nt in norm_text(cue_text) or _pinyin_substr(target, cue_text)) else 0.0
                 else:
-                    cs = char_similarity(cue_text, target)
+                    cs = char_similarity_ex(cue_text, target)
                 if ri == last_assigned:
                     cs += 0.03  # locality
                 if cs > best_score:
@@ -612,7 +788,18 @@ def align(segments, cues, model):
                     best_sim = s
                     best_ci = ci
 
-            if best_ci >= 0 and best_sim >= 0.55:
+            # ASR homophone errors drag the embedding sim of a genuinely
+            # matching chunk from ~0.9 down to ~0.55-0.6 (measured on whisper
+            # VTTs), leaving it hovering at the acceptance threshold. When the
+            # embedding alone is borderline, let a strong pinyin/char match of
+            # the chunk text vote the rescue through.
+            accept = False
+            if best_ci >= 0:
+                if best_sim >= 0.55:
+                    accept = True
+                elif best_sim >= 0.40 and char_similarity_ex(chunks[best_ci], segments[si]) >= 0.5:
+                    accept = True
+            if accept:
                 cur_a = chunk_assignments[best_ci]
                 cur_sim = _sim_for_seg(best_ci, cur_a)
                 cur_count = sum(1 for a in chunk_assignments if a == cur_a)
@@ -660,8 +847,8 @@ def align(segments, cues, model):
         if not nt:
             return 0.0
         if len(nt) <= SHORT_TARGET_LEN:
-            return 1.0 if nt in nc else 0.0
-        return char_similarity(cue_text, target)
+            return 1.0 if (nt in nc or _pinyin_substr(target, cue_text)) else 0.0
+        return char_similarity_ex(cue_text, target)
 
     def _boundary_sim(cue_text, target):
         # Same short-target substring rule as _snap_sim to avoid
@@ -670,8 +857,8 @@ def align(segments, cues, model):
         if not nt:
             return 0.0
         if len(nt) <= SHORT_TARGET_LEN:
-            return 1.0 if nt in norm_text(cue_text) else 0.0
-        return char_similarity(cue_text, target)
+            return 1.0 if (nt in norm_text(cue_text) or _pinyin_substr(target, cue_text)) else 0.0
+        return char_similarity_ex(cue_text, target)
 
     def _is_duplicate_seg(i):
         # True if segments[i]'s leading text appears as substring in an
@@ -724,6 +911,31 @@ def align(segments, cues, model):
             _occupied_segs.add(best_si)
         last_assigned = seg_map[ci]
 
+    # --- Strip spurious cue support from panel headers ---
+    # A stray ASR fragment (a cut-off "暴") or an embedding coincidence (chunk
+    # "好，我们留下思考题" vs heading "今日思考") sometimes lands on an appendix
+    # heading; the heading then flash-highlights with an auto-scroll, and —
+    # because it counts as "mapped" — blocks the boundary/gap passes below from
+    # placing those cues where they belong. Keep a header mapped only when its
+    # cues actually SAY the heading; otherwise hand the cues back to the
+    # previous mapped segment. Runs BEFORE boundary refinement so the freed
+    # cues can be redistributed properly.
+    _ms0 = set(seg_map)
+    for s2 in sorted(_ms0):
+        if not (0 <= s2 < n) or not _is_panel_header(segments[s2]):
+            continue
+        sup = [ci2 for ci2, x in enumerate(seg_map) if x == s2]
+        joined_txt = ''.join(cues[c]['text'] for c in sup)
+        nh = norm_text(segments[s2])
+        if nh and (nh in norm_text(joined_txt) or _pinyin_substr(segments[s2], joined_txt)):
+            continue
+        prev_mapped = max((x for x in _ms0 if x < s2), default=None)
+        if prev_mapped is None:
+            continue
+        for ci2 in sup:
+            seg_map[ci2] = prev_mapped
+        _ms0.discard(s2)
+
     # --- Per-cue boundary refinement pass ---
     # At each transition (seg_map[ci]=A, seg_map[ci+1]=B with A+1==B), examine
     # the cues in a window around ci and pick the split point that maximizes
@@ -741,10 +953,20 @@ def align(segments, cues, model):
             continue
         A = seg_map[ci_iter]
         B = seg_map[ci_iter + 1]
-        # Only adjacent segments (skip gaps — those are handled by interpolation)
-        if A + 1 != B or A < 0 or B >= n:
+        if A < 0 or B >= n:
             ci_iter += 1
             continue
+        # Adjacent segments refine directly. A gap transition is treated as
+        # pseudo-adjacent ONLY when nothing in between is mapped (the skipped
+        # interiors are panels/unspoken content; genuinely spoken interiors
+        # are claimed by the gap-rescue pass below). Without this, a cue like
+        # "好，我们留下思考题" stays glued to the previous section and the
+        # following segment's start drifts several seconds late.
+        if A + 1 != B:
+            _mapped_now = set(seg_map)
+            if any(s in _mapped_now for s in range(A + 1, B)):
+                ci_iter += 1
+                continue
         lo = ci_iter
         while lo > 0 and seg_map[lo - 1] == A and (ci_iter - lo + 1) < BOUNDARY_WIN:
             lo -= 1
@@ -772,6 +994,116 @@ def align(segments, cues, model):
         for j in range(best_k, hi + 1):
             seg_map[j] = B
         ci_iter = hi + 1
+
+    # --- Gap-transition rescue pass ---
+    # At a transition A→B that JUMPS over unmapped segments, the prefix of the
+    # B-run may actually speak one of the skipped segments. Real case: a short
+    # transitional cue ("好，这一讲就到这儿") embedding-matched B early, and
+    # monotonicity then dragged the following cues — which verbatim speak the
+    # skipped summary segment — past it. Walk the B-run prefix and relabel
+    # cues to interior segments (ascending, contiguous prefix only, so
+    # monotonicity is preserved by construction) when the pinyin-aware match
+    # is clearly better than what the cue scores against B.
+    GAP_WIN = 6
+    ci_iter = 0
+    while ci_iter < len(seg_map) - 1:
+        A = seg_map[ci_iter]
+        B = seg_map[ci_iter + 1]
+        if B <= A + 1:
+            ci_iter += 1
+            continue
+        interiors = [s for s in range(A + 1, B) if len(norm_text(segments[s])) >= 8]
+        if not interiors:
+            ci_iter += 1
+            continue
+        hi = ci_iter + 1
+        while hi < len(seg_map) - 1 and seg_map[hi + 1] == B and (hi - ci_iter) < GAP_WIN:
+            hi += 1
+        # Only bother when some window cue clearly speaks an interior segment.
+        window = list(range(ci_iter + 1, hi + 1))
+        has_interior_hit = any(
+            max(char_similarity_ex(cues[j]['text'], segments[s]) for s in interiors) >= 0.45
+            for j in window)
+        if not has_interior_hit:
+            ci_iter = hi + 1
+            continue
+        ptr = -1           # index into interiors of the last assignment
+        orphan_budget = 2  # transition ad-libs we may park without breaking
+        j = ci_iter + 1
+        while j <= hi:
+            ct = cues[j]['text']
+            cur_sim = char_similarity_ex(ct, segments[B]) if B < n else 0.0
+            best_k = -1
+            best_sim = 0.0
+            for k in range(max(ptr, 0), len(interiors)):
+                sim = char_similarity_ex(ct, segments[interiors[k]])
+                if sim > best_sim:
+                    best_sim = sim
+                    best_k = k
+            if best_k >= 0 and best_sim >= 0.45 and best_sim > cur_sim + 0.10:
+                seg_map[j] = interiors[best_k]
+                ptr = best_k
+                j += 1
+            elif orphan_budget > 0 and best_sim < 0.35 and cur_sim < 0.35:
+                # Pure transition ad-lib ("好，这一讲就到这儿") matching neither
+                # side: park it on the previous label so it can't block the
+                # prefix walk toward the genuinely-spoken interior text.
+                seg_map[j] = A if ptr < 0 else interiors[ptr]
+                orphan_budget -= 1
+                j += 1
+            else:
+                break  # a genuine B cue ends the relabelable prefix
+        ci_iter = hi + 1
+
+    # --- Merge identical-twin segments ---
+    # Upstream OCR rebuilds occasionally paste the same paragraph twice. The
+    # twins have identical text, so the aligner splits one speech run between
+    # them and the highlight hops mid-sentence from one copy to the other.
+    # When two CONSECUTIVELY-mapped segments are verbatim duplicates, give the
+    # later twin's cues back to the earlier one; the later twin goes unmapped
+    # (and the non-spoken weighting below keeps it from soaking up time).
+    _norm_segs = [norm_text(s) for s in segments]
+    _mapped_sorted = sorted(set(seg_map))
+    for _k in range(len(_mapped_sorted) - 1):
+        i_, j_ = _mapped_sorted[_k], _mapped_sorted[_k + 1]
+        if len(_norm_segs[i_]) >= 10 and _norm_segs[i_] == _norm_segs[j_]:
+            for ci2 in range(len(seg_map)):
+                if seg_map[ci2] == j_:
+                    seg_map[ci2] = i_
+
+    # --- Tail isolated-match gate ---
+    # Trailing cues (usually the spoken "下一讲预告", absent from the article)
+    # sometimes embedding-match a 划重点 bullet deep in the unmapped appendix.
+    # That one spurious hit turns what should be a quiet null tail into an
+    # interpolation chain, and the last seconds of playback hop-highlight
+    # through the appendix with auto-scrolls to match. Gate: the LAST mapped
+    # segment, when it sits in the final 20% of the article, separated from
+    # the previous mapped segment by >=2 unmapped ones and holding <=4 cues,
+    # must sound like its text — the island's cues JOINED (a preview only
+    # brushes the bullet with a few chars, so joint sim stays low, while a
+    # genuinely spoken bullet covers most of it) at a physically possible
+    # speech rate — or its cues return to the previous mapped segment (the
+    # highlight then rests there: the null-tail design behavior).
+    while True:
+        _ms = sorted(set(seg_map))
+        if len(_ms) < 2:
+            break
+        X = _ms[-1]
+        P = _ms[-2]
+        if X < n * 0.8 or X - P < 3:
+            break
+        island = [ci2 for ci2, s2 in enumerate(seg_map) if s2 == X]
+        if len(island) > 4:
+            break
+        joined = ''.join(cues[ci2]['text'] for ci2 in island)
+        sim = char_similarity_ex(joined, segments[X])
+        span = cues[island[-1]]['end'] - cues[island[0]]['start']
+        chars = len(norm_text(segments[X]))
+        rate_impossible = span > 0 and chars / max(span, 0.01) > 20
+        if sim >= 0.35 and not rate_impossible:
+            break
+        for ci2 in island:
+            seg_map[ci2] = P
 
     # Derive segTimeRanges
     seg_first = [None] * n
@@ -813,8 +1145,8 @@ def align(segments, cues, model):
         saw_pure_orphan = False  # a cue matching NEITHER this seg nor the next
         while new_last > first_ci:
             ct = cues[new_last]['text']
-            s_this = char_similarity(ct, this_txt)
-            s_next = char_similarity(ct, next_txt)
+            s_this = char_similarity_ex(ct, this_txt)
+            s_next = char_similarity_ex(ct, next_txt)
             # Stop at the first cue that genuinely belongs to this segment.
             # A weak self-match that leans toward the upcoming section (or is a
             # pure orphan matching neither) is transitional → trim it.
@@ -879,12 +1211,43 @@ def align(segments, cues, model):
                 next_start = seg_time_ranges[j]['start']
                 break
         
+        # Spoken-likelihood weights: panel headings (今日得到/划重点/…) and
+        # duplicate-pasted segments are never narrated — zero weight, so they
+        # get a zero-width range at the cursor instead of a flash of stolen
+        # time. A panel heading also zeroes everything AFTER it in the run
+        # (its bullets/content belong to the same non-spoken panel block).
+        # Everything else keeps its text length as weight.
+        run_segments_idx = list(range(run_start_idx, run_end_idx + 1))
+        weights = []
+        _in_panel_block = False
+        for si in run_segments_idx:
+            if _is_panel_header(segments[si]):
+                _in_panel_block = True
+            if _in_panel_block or dup_seg[si]:
+                weights.append(0)
+            else:
+                weights.append(max(len(segments[si]), 1))
+        total_w = sum(weights)
+
+        # Fully non-spoken interior run (all panels/dups): give it NO time at
+        # all — extend the previous mapped segment across the gap (any audio
+        # there is untexted ad-lib; the highlight should rest where it was)
+        # and pin the run's segments as zero-width at the next segment's
+        # start. The frontend's "last start <= t" pick then never lands on
+        # them because the following mapped segment shares the same start.
+        if prev_end is not None and next_start is not None and total_w == 0:
+            if prev_idx is not None:
+                seg_time_ranges[prev_idx]['end'] = next_start
+            for si in run_segments_idx:
+                seg_time_ranges[si] = {'start': next_start, 'end': next_start}
+            continue
+
         # Determine available time for this gap
         if prev_end is not None and next_start is not None:
             gap_time = next_start - prev_end
             # If the gap is very small (<2s per segment), borrow time from neighbors
-            run_len = run_end_idx - run_start_idx + 1
-            needed_time = run_len * 1.5  # ~1.5s per segment minimum
+            run_len = sum(1 for w in weights if w > 0)
+            needed_time = run_len * 1.5  # ~1.5s per spoken-like segment minimum
             # Don't borrow time for duplicate segs (OCR-pasted content with no
             # real audio) — keep the mapped neighbor's range intact.
             any_dup_in_run = any(dup_seg[j] for j in range(run_start_idx, run_end_idx + 1))
@@ -920,7 +1283,7 @@ def align(segments, cues, model):
             # single zero-width point at audio_end). A spoken-but-unaligned
             # outro instead leaves real audio time (cues extend past prev_end)
             # => remaining is large => fall through and spread it below.
-            if remaining < run_len * 0.8:
+            if remaining < run_len * 0.8 or total_w == 0:
                 continue  # entries stay None; skip the distribution block
             min_dur = 0.5 * run_len
             gap_time = max(remaining, min_dur)
@@ -932,15 +1295,12 @@ def align(segments, cues, model):
             start_t = 0
             gap_time = audio_end
         
-        # Distribute proportionally by text length
-        run_segments_idx = list(range(run_start_idx, run_end_idx + 1))
-        text_lengths = [max(len(segments[si]), 1) for si in run_segments_idx]
-        total_len = sum(text_lengths)
-        
+        # Distribute proportionally by spoken-likelihood weight (panel headers
+        # and duplicate segs weigh 0 → zero-width at the cursor, no flash).
         cursor = start_t
+        denom = total_w if total_w > 0 else 1
         for idx_in_run, si in enumerate(run_segments_idx):
-            proportion = text_lengths[idx_in_run] / total_len
-            seg_dur = gap_time * proportion
+            seg_dur = gap_time * (weights[idx_in_run] / denom)
             seg_time_ranges[si] = {
                 'start': cursor,
                 'end': cursor + seg_dur
@@ -973,8 +1333,11 @@ def align(segments, cues, model):
             if any(dup_seg[j] for j in range(i + 1, run_end + 1)):
                 continue
 
-            unmapped_len = sum(max(len(segments[j]), 1) for j in range(i + 1, run_end + 1))
-            unmapped_dur = sum(seg_time_ranges[j]['end'] - seg_time_ranges[j]['start'] 
+            _w = lambda j: 0 if (dup_seg[j] or _is_panel_header(segments[j])) else max(len(segments[j]), 1)
+            unmapped_len = sum(_w(j) for j in range(i + 1, run_end + 1))
+            if unmapped_len == 0:
+                continue  # all panels/dups — nothing spoken to redistribute to
+            unmapped_dur = sum(seg_time_ranges[j]['end'] - seg_time_ranges[j]['start']
                               for j in range(i + 1, run_end + 1))
             
             # If my time per char is >3x the unmapped time per char, redistribute
@@ -993,17 +1356,14 @@ def align(segments, cues, model):
                 if new_my_dur < my_dur - 1.0:  # only if saving >1s
                     freed = my_dur - new_my_dur
                     seg_time_ranges[i]['end'] = seg_time_ranges[i]['start'] + new_my_dur
-                    
-                    # Re-distribute freed time to unmapped segments proportionally
+
+                    # Re-distribute freed time to unmapped segments by
+                    # spoken-likelihood weight (panels/dups stay zero-width)
                     cursor = seg_time_ranges[i]['end']
-                    remaining_unmapped_len = sum(max(len(segments[j]), 1) 
-                                                  for j in range(i + 1, run_end + 1))
                     total_freed = freed + unmapped_dur
-                    
+
                     for j in range(i + 1, run_end + 1):
-                        seg_len = max(len(segments[j]), 1)
-                        proportion = seg_len / remaining_unmapped_len
-                        seg_dur = total_freed * proportion
+                        seg_dur = total_freed * (_w(j) / unmapped_len)
                         seg_time_ranges[j] = {
                             'start': cursor,
                             'end': cursor + seg_dur
@@ -1042,6 +1402,150 @@ def align(segments, cues, model):
 
     return seg_map, seg_time_ranges
 
+def _file_sha1(path):
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 16), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# ── Model singleton (daemon mode loads it exactly once) ──
+_MODEL = None
+
+def _enable_hf_offline_if_cached():
+    """Skip HuggingFace Hub's online revision checks (~5.5s per run through
+    the local DNS/proxy) whenever the model snapshot is already on disk.
+    A fresh install (no snapshot yet) keeps full online behavior so the
+    first-ever run can still download the model."""
+    try:
+        base = os.environ.get('HF_HOME') or os.path.join(os.path.expanduser('~'), '.cache', 'huggingface')
+        snap = os.path.join(base, 'hub', 'models--BAAI--bge-small-zh-v1.5', 'snapshots')
+        if os.path.isdir(snap) and any(os.scandir(snap)):
+            os.environ.setdefault('HF_HUB_OFFLINE', '1')
+            os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+    except Exception:
+        pass
+
+def get_model():
+    global _MODEL
+    if _MODEL is None:
+        _enable_hf_offline_if_cached()
+        from sentence_transformers import SentenceTransformer
+        _MODEL = SentenceTransformer('BAAI/bge-small-zh-v1.5')
+    return _MODEL
+
+
+def run_job(article_path, vtt_path, output_path=None, segments=None):
+    """One complete alignment job. Returns the result dict; when output_path
+    is given the cache file is written ATOMICALLY (tmp + rename) so a
+    concurrent reader can never observe a truncated JSON."""
+    t0 = time.time()
+    version = _load_align_version()  # fresh each job — a daemon may outlive a bump
+
+    with open(article_path, 'r', encoding='utf-8') as f:
+        md_text = f.read()
+    with open(vtt_path, 'r', encoding='utf-8') as f:
+        vtt_text = f.read()
+    vtt_text = apply_hotwords(vtt_text, vtt_path)
+
+    # Content hashes let server.js keep a cache whose mtime went stale but
+    # whose inputs didn't actually change (iCloud touches, bulk re-syncs).
+    md_hash = _file_sha1(article_path)
+    vtt_hash = _file_sha1(vtt_path)
+
+    if segments is None:
+        segments = parse_segments(md_text)
+    cues = parse_vtt(vtt_text)
+
+    if not segments or not cues:
+        # A legitimately empty article / empty VTT is NOT a failure. Still write
+        # the cache file so server.js (which checks `code===0 && fs.existsSync`)
+        # returns 200 with an empty map instead of a 500, and stamp the version
+        # so it isn't regenerated forever.
+        result = {
+            'segMap': [], 'segTimeRanges': [],
+            'stats': {
+                'version': version,
+                'segments': len(segments),
+                'cues': len(cues),
+                'segsHit': 0,
+                'mdHash': md_hash,
+                'vttHash': vtt_hash,
+                'error': 'no segments or cues',
+            },
+        }
+        _write_result(result, output_path)
+        return result
+
+    t1 = time.time()
+    already_loaded = _MODEL is not None
+    model = get_model()
+    t2 = time.time()
+
+    seg_map, seg_time_ranges = align(segments, cues, model)
+    t3 = time.time()
+
+    # Stats. Bump 'version' (align-version.json) whenever align.py logic
+    # changes in a way that invalidates existing caches; server-side self-heal
+    # compares and regenerates on mismatch.
+    stats = {
+        'version': version,
+        'segments': len(segments),
+        'cues': len(cues),
+        'segsHit': len(set(seg_map)),
+        'modelLoadTime': 0.0 if already_loaded else round(t2 - t1, 1),
+        'alignTime': round(t3 - t2, 2),
+        'totalTime': round(t3 - t0, 1),
+        'mdHash': md_hash,
+        'vttHash': vtt_hash,
+    }
+
+    result = {'segMap': seg_map, 'segTimeRanges': seg_time_ranges, 'stats': stats}
+    _write_result(result, output_path)
+    return result
+
+
+def _write_result(result, output_path):
+    if not output_path:
+        return
+    tmp = f"{output_path}.tmp{os.getpid()}"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(result, f)
+    os.replace(tmp, output_path)
+
+
+def daemon_loop():
+    """JSON-lines alignment server on stdin/stdout. Protocol:
+      → {"id": <any>, "article": path, "vtt": path, "out": path, "segments": [..]|null}
+      ← {"id": <any>, "ok": true, "stats": {...}}   (result JSON is in `out`)
+      ← {"id": <any>, "ok": false, "error": "..."}
+    The embedding model is loaded once at startup ({"ready":true} is emitted
+    when serving can begin); server.js keeps this process warm so per-article
+    alignment costs ~0.7s instead of ~10s of import+model-load per spawn."""
+    t0 = time.time()
+    get_model()
+    sys.stdout.write(json.dumps({'ready': True, 'modelLoadTime': round(time.time() - t0, 2)}) + '\n')
+    sys.stdout.flush()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        rid = None
+        try:
+            req = json.loads(line)
+            rid = req.get('id')
+            segs = req.get('segments')
+            if not (isinstance(segs, list) and segs and all(isinstance(x, str) for x in segs)):
+                segs = None
+            result = run_job(req['article'], req['vtt'], req.get('out'), segs)
+            resp = {'id': rid, 'ok': True, 'stats': result.get('stats')}
+        except Exception as e:
+            resp = {'id': rid, 'ok': False, 'error': str(e)[:500]}
+        sys.stdout.write(json.dumps(resp) + '\n')
+        sys.stdout.flush()
+
+
 def main():
     # Optional --segments <path>: a JSON array of the EXACT segment texts the
     # frontend's collectArticleSegments() produced. When supplied we align
@@ -1051,6 +1555,9 @@ def main():
     # eliminating the fragile parse_segments↔marked.parse↔innerText coupling.
     # parse_segments() remains the fallback (CLI use, or if the file is missing).
     argv = sys.argv[1:]
+    if '--daemon' in argv:
+        daemon_loop()
+        return
     segments_path = None
     if '--segments' in argv:
         si = argv.index('--segments')
@@ -1058,20 +1565,12 @@ def main():
         del argv[si:si + 2]
 
     if len(argv) < 2:
-        print("Usage: python3 align.py [--segments segs.json] <article.md> <audio.vtt> [output.json]", file=sys.stderr)
+        print("Usage: python3 align.py [--segments segs.json] <article.md> <audio.vtt> [output.json] | --daemon", file=sys.stderr)
         sys.exit(1)
 
     article_path = argv[0]
     vtt_path = argv[1]
     output_path = argv[2] if len(argv) > 2 else None
-
-    t0 = time.time()
-
-    # Read files
-    with open(article_path, 'r', encoding='utf-8') as f:
-        md_text = f.read()
-    with open(vtt_path, 'r', encoding='utf-8') as f:
-        vtt_text = f.read()
 
     segments = None
     if segments_path:
@@ -1083,66 +1582,10 @@ def main():
                 segments = [str(x) for x in loaded]
         except Exception as e:
             print(f"[align] segments file unreadable, falling back to parse_segments: {e}", file=sys.stderr)
-    if segments is None:
-        segments = parse_segments(md_text)
-    cues = parse_vtt(vtt_text)
-    
-    if not segments or not cues:
-        # A legitimately empty article / empty VTT is NOT a failure. Still write
-        # the cache file so server.js (which checks `code===0 && fs.existsSync`)
-        # returns 200 with an empty map instead of a 500, and stamp the version
-        # so it isn't regenerated forever.
-        result = {
-            'segMap': [], 'segTimeRanges': [],
-            'stats': {
-                'version': ALIGN_VERSION,
-                'segments': len(segments),
-                'cues': len(cues),
-                'segsHit': 0,
-                'error': 'no segments or cues',
-            },
-        }
-        if output_path:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(result, f)
-        else:
-            json.dump(result, sys.stdout)
-        return
-    
-    # Load model
-    t1 = time.time()
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer('BAAI/bge-small-zh-v1.5')
-    t2 = time.time()
-    
-    # Align
-    seg_map, seg_time_ranges = align(segments, cues, model)
-    t3 = time.time()
-    
-    # Stats. Bump 'version' whenever align.py logic changes in a way that
-    # invalidates existing caches; server-side self-heal compares to its own
-    # ALIGN_VERSION and regenerates on mismatch.
-    segs_hit = len(set(seg_map))
-    stats = {
-        'version': ALIGN_VERSION,
-        'segments': len(segments),
-        'cues': len(cues),
-        'segsHit': segs_hit,
-        'modelLoadTime': round(t2 - t1, 1),
-        'alignTime': round(t3 - t2, 2),
-        'totalTime': round(t3 - t0, 1)
-    }
-    
-    result = {
-        'segMap': seg_map,
-        'segTimeRanges': seg_time_ranges,
-        'stats': stats
-    }
-    
+
+    result = run_job(article_path, vtt_path, output_path, segments)
     if output_path:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f)
-        print(json.dumps(stats), file=sys.stderr)
+        print(json.dumps(result['stats']), file=sys.stderr)
     else:
         json.dump(result, sys.stdout)
 

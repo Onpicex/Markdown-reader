@@ -1,0 +1,11 @@
+{
+  "_comment": "Optional ASR hotword fixes applied to VTT text before alignment (align.py) and after transcription (qwen_vtt.py). Copy to hotwords.json (gitignored). 'courses' keys match any substring of the VTT/audio path — typically the course directory name.",
+  "global": [
+    ["wrong-word", "right-word"]
+  ],
+  "courses": {
+    "some-course-dir": [
+      ["mis-heard-name", "correct-name"]
+    ]
+  }
+}

@@ -21,6 +21,12 @@ node_modules/
 HANDOFF*.md
 archive/HANDOFF*.md
 
+# Course-specific ASR hotwords (contains real course names; see hotwords.example.json)
+hotwords.json
+
+# Pre-retranscription VTT backups (whisper-era VTTs are irreproducible)
+archive/vtt-backups/
+
 # Debug/test scripts
 debug-*.mjs
 test-*.mjs

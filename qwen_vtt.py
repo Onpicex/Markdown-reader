@@ -83,6 +83,30 @@ def _fmt(ts):
     h=int(ts//3600); m=int((ts%3600)//60); s=ts%60
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
+def _apply_hotwords(cues, audio_path):
+    """Optional hotwords.json next to this script (gitignored; see
+    hotwords.example.json): course-scoped ASR homophone fixes baked into the
+    VTT at transcription time so every downstream consumer sees clean text.
+    Course keys match by substring of the audio path."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hotwords.json")
+        with open(p, encoding="utf-8") as f:
+            hw = json.load(f)
+    except Exception:
+        return cues
+    pairs = list(hw.get("global") or [])
+    for course, extra in (hw.get("courses") or {}).items():
+        if course and course in audio_path:
+            pairs.extend(extra or [])
+    for c in cues:
+        for pair in pairs:
+            try:
+                if pair[0] and isinstance(pair[0], str) and isinstance(pair[1], str):
+                    c["text"] = c["text"].replace(pair[0], pair[1])
+            except Exception:
+                continue
+    return cues
+
 def main():
     if len(sys.argv) < 3:
         print("usage: qwen_vtt.py <audio> <out.vtt>", file=sys.stderr); sys.exit(2)
@@ -97,11 +121,13 @@ def main():
         if not js:
             print("qwen_vtt: no json produced", file=sys.stderr); sys.exit(3)
         data = json.load(open(js[0], encoding="utf-8"))
-    cues = regroup(merge_per_chunk(data))
+    cues = _apply_hotwords(regroup(merge_per_chunk(data)), audio)
     if not cues:
         print("qwen_vtt: empty transcript", file=sys.stderr); sys.exit(4)
     with open(out_vtt, "w", encoding="utf-8") as f:
-        f.write("WEBVTT\n\n")
+        # The NOTE line marks engine provenance: server.js treats VTTs without
+        # it as legacy (whisper-era) and offers/queues re-transcription.
+        f.write("WEBVTT\n\nNOTE transcriber: qwen3-asr (" + MODEL + ")\n\n")
         for c in cues:
             f.write(f"{_fmt(c['start'])} --> {_fmt(c['end'])}\n{c['text']}\n\n")
 
