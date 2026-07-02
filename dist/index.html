@@ -182,7 +182,24 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .art-body hr{border:none;border-top:1px solid var(--border);margin:2em 0}
 .audio-embed{margin:1.2em 0;padding:14px 16px;background:var(--quote-bg);border-radius:10px;border:1px solid var(--border-lt)}
 .audio-embed .audio-label{font-size:14px;color:var(--text-2);margin-bottom:8px;font-weight:500}
-.audio-embed audio{width:100%;height:40px;outline:none}
+.audio-embed audio{display:none}
+/* Custom themed player (replaces native <audio controls>: consistent look,
+   speed control on iOS, and a scrub track with a real touch target) */
+.ia-player{display:flex;align-items:center;gap:10px;margin:2px 0}
+.ia-btn{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 8px;border:1px solid var(--border);border-radius:17px;background:var(--bg);color:var(--text-2);font-size:14px;font-family:var(--font);cursor:pointer;transition:all var(--tr);flex:none}
+.ia-btn:hover{border-color:var(--gold-light);color:var(--gold)}
+.ia-play{font-size:13px}
+.ia-speed{font-size:12px}
+.ia-time{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;flex:none;min-width:38px;text-align:center}
+.ia-track{position:relative;flex:1;height:22px;cursor:pointer;touch-action:none}
+.ia-track::before{content:'';position:absolute;left:0;right:0;top:9px;height:4px;border-radius:2px;background:var(--border)}
+.ia-fill{position:absolute;left:0;top:9px;height:4px;border-radius:2px;background:var(--gold);width:0%;pointer-events:none}
+.ia-fill::after{content:'';position:absolute;right:-5px;top:-3px;width:10px;height:10px;border-radius:50%;background:var(--gold)}
+.ia-follow-pill{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(24px + env(safe-area-inset-bottom));z-index:60;padding:8px 16px;border-radius:20px;border:1px solid var(--gold);background:var(--bg);color:var(--gold);font-size:13px;font-family:var(--font);cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.15)}
+.ia-follow-pill:hover{background:var(--gold-faint)}
+.inline-audio-hl{position:relative}
+.inline-audio-hl::after{content:'';position:absolute;left:0;bottom:-2px;height:2px;width:var(--ia-progress,0%);background:var(--gold);border-radius:1px}
+@media (prefers-reduced-motion: no-preference){.inline-audio-hl::after{transition:width .3s linear}}
 .video-embed{margin:1.2em 0}
 .video-embed video{max-width:100%;border-radius:8px}
 
@@ -389,10 +406,10 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 
 /* ── Audio embed transcribe button ────────── */
 .audio-embed-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
-.audio-sub-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border:1px solid var(--border);border-radius:16px;background:var(--bg);color:var(--text-2);font-size:12px;font-family:var(--font);cursor:pointer;transition:all var(--tr);white-space:nowrap}
-.audio-sub-btn:hover{border-color:var(--gold-light);color:var(--gold)}
+.audio-sub-btn,.audio-retrans-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border:1px solid var(--border);border-radius:16px;background:var(--bg);color:var(--text-2);font-size:12px;font-family:var(--font);cursor:pointer;transition:all var(--tr);white-space:nowrap}
+.audio-sub-btn:hover,.audio-retrans-btn:hover{border-color:var(--gold-light);color:var(--gold)}
 .audio-sub-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-faint)}
-.audio-sub-btn:disabled{opacity:.6;cursor:not-allowed}
+.audio-sub-btn:disabled,.audio-retrans-btn:disabled{opacity:.6;cursor:not-allowed}
 
 /* Toast */
 .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:10px 24px;background:rgba(0,0,0,.78);color:#fff;border-radius:8px;font-size:14px;font-family:var(--font);z-index:9999;pointer-events:none;opacity:0;transition:opacity .25s}
@@ -869,7 +886,7 @@ function convertWikiLinks(md){
     if(/\.(mp3|wav|ogg|m4a)$/i.test(t)){
       const encoded='/vault/'+t.split('/').map(s=>encodeURIComponent(s)).join('/');
       const label=(alt||t.split('/').pop().replace(/\.[^.]+$/,'')).trim();
-      return '<div class="audio-embed" data-audio-path="'+ha(t)+'"><div class="audio-label">\ud83c\udfb5 '+h(label)+'</div><audio controls preload="metadata" src="'+ha(encoded)+'"></audio><div class="audio-embed-actions"><button class="audio-sub-btn" data-audio-src="'+ha(encoded)+'" data-audio-rel="'+ha(t)+'">\ud83d\udd24 字幕跟读</button></div></div>';
+      return '<div class="audio-embed" data-audio-path="'+ha(t)+'"><div class="audio-label">\ud83c\udfb5 '+h(label)+'</div><audio preload="metadata" src="'+ha(encoded)+'"></audio><div class="ia-player"><button class="ia-btn ia-play" title="播放/暂停">▶</button><span class="ia-time ia-cur">0:00</span><div class="ia-track"><div class="ia-fill"></div></div><span class="ia-time ia-dur">--:--</span><button class="ia-btn ia-speed" title="播放速度">1×</button></div><div class="audio-embed-actions"><button class="audio-sub-btn" data-audio-src="'+ha(encoded)+'" data-audio-rel="'+ha(t)+'">\ud83d\udd24 字幕跟读</button><button class="audio-retrans-btn" data-audio-rel="'+ha(t)+'" style="display:none" title="旧字幕重新转写">↻ 重转字幕</button></div></div>';
     }
     // Video embed → <video> player
     if(/\.(mp4|webm)$/i.test(t)){
@@ -1333,6 +1350,8 @@ async function loadArticle(id, highlightText){
       const w=document.createElement('div');w.className='md-table-wrap';
       t.parentNode.insertBefore(w,t);w.appendChild(t);
     });
+    // Wire custom audio player controls (play/scrub/speed/resume/MediaSession)
+    initAudioPlayers();
     // ── Citation cross-refs: <sup>a3,b5</sup> → clickable, jumps to the source row ──
     (function(){
       const bodyEl=ct.querySelector('.art-body'); if(!bodyEl)return;
@@ -2376,7 +2395,53 @@ function scrollElIntoView(el){
   const elRect=el.getBoundingClientRect();
   const offset=elRect.top-ctRect.top+ct.scrollTop;
   const target=offset-ct.clientHeight*0.25;
-  ct.scrollTo({top:Math.max(0,target),behavior:'smooth'});
+  const smooth=!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  ct.scrollTo({top:Math.max(0,target),behavior:smooth?'smooth':'auto'});
+}
+
+// ── 跟读自动滚动的用户意图检测 ─────────────────
+// While follow-along/TTS plays, a manual wheel/touch scroll pauses the
+// auto-follow (it used to yank the viewport back on every segment change);
+// a floating pill restores it.
+let _iaUserScrolled=false;
+let _iaFollowPill=null;
+function _iaShowFollowPill(){
+  if(_iaFollowPill)return;
+  const p=document.createElement('button');
+  p.className='ia-follow-pill';
+  p.textContent='↩ 回到朗读位置';
+  p.addEventListener('click',()=>{
+    _iaResetScrollIntent();
+    const hl=document.querySelector('.tts-highlight');
+    if(hl)scrollElIntoView(hl);
+  });
+  document.body.appendChild(p);
+  _iaFollowPill=p;
+}
+function _iaResetScrollIntent(){
+  _iaUserScrolled=false;
+  if(_iaFollowPill){_iaFollowPill.remove();_iaFollowPill=null;}
+}
+function _iaMarkUserScroll(){
+  const following=(typeof InlineAudio!=='undefined'&&InlineAudio.active.size>0)
+    ||(typeof TTS!=='undefined'&&(TTS.playing||TTS.paused));
+  if(following&&document.querySelector('.tts-highlight')){
+    _iaUserScrolled=true;
+    _iaShowFollowPill();
+  }
+}
+// Programmatic scrolls don't fire wheel/touchmove/keys, so these only catch
+// genuine user intent.
+ct.addEventListener('wheel',_iaMarkUserScroll,{passive:true});
+ct.addEventListener('touchmove',_iaMarkUserScroll,{passive:true});
+document.addEventListener('keydown',(e)=>{
+  if(['PageUp','PageDown','ArrowUp','ArrowDown','Home','End',' '].includes(e.key)
+     &&!/INPUT|TEXTAREA|SELECT/.test((e.target&&e.target.tagName)||''))_iaMarkUserScroll();
+});
+// Auto-follow scroll used by TTS + InlineAudio highlight changes only.
+function _iaAutoScroll(el){
+  if(_iaUserScrolled){_iaShowFollowPill();return;}
+  scrollElIntoView(el);
 }
 
 // ── 从笔记.md 链接跳转到文字位置 ─────
@@ -2990,7 +3055,7 @@ const TTS={
     if(!seg||!seg.el)return;
     seg.el.classList.add('tts-highlight');
     this._hlEl=seg.el;
-    scrollElIntoView(seg.el);
+    _iaAutoScroll(seg.el);
   },
 
   clearHighlight(){
@@ -3045,27 +3110,145 @@ ttsProgress.addEventListener('click',(e)=>{
   TTS.seekTo(Math.max(0,Math.min(1,ratio)));
 });
 
-// Click highlighted text to pause/resume TTS or InlineAudio
+// Click highlighted text to pause/resume; click any OTHER aligned paragraph
+// (while a follow-along session is active) to jump playback there.
 document.getElementById('ct').addEventListener('click',(e)=>{
   const hl=e.target.closest('.tts-highlight');
-  if(!hl)return;
-  // Check if this is an InlineAudio highlight
-  if(hl.classList.contains('inline-audio-hl')){
-    // Find which InlineAudio session owns this element
-    for(const [src,s] of InlineAudio.active){
-      const idx=s.segments.findIndex(seg=>seg.el===hl);
-      if(idx>=0){
-        if(s.audio.paused) s.audio.play();
-        else s.audio.pause();
-        break;
+  if(hl){
+    // Check if this is an InlineAudio highlight
+    if(hl.classList.contains('inline-audio-hl')){
+      // Find which InlineAudio session owns this element
+      for(const [src,s] of InlineAudio.active){
+        const idx=s.segments.findIndex(seg=>seg.el===hl);
+        if(idx>=0){
+          if(s.audio.paused) s.audio.play();
+          else s.audio.pause();
+          break;
+        }
       }
+      return;
     }
+    // Original TTS pause/resume
+    if(TTS.generating)return;
+    if(TTS.playing) TTS.pause();
+    else if(TTS.paused) TTS.play();
     return;
   }
-  // Original TTS pause/resume
-  if(TTS.generating)return;
-  if(TTS.playing) TTS.pause();
-  else if(TTS.paused) TTS.play();
+  // Tap-to-seek: only while following, never hijacking links/buttons/selection
+  if(typeof InlineAudio==='undefined'||InlineAudio.active.size===0)return;
+  if(e.target.closest('a,button,mark,input,textarea,select,.audio-embed,.md-table-wrap'))return;
+  const sel=window.getSelection&&window.getSelection();
+  if(sel&&!sel.isCollapsed)return;
+  const block=e.target.closest('.art-body p,.art-body h1,.art-body h2,.art-body h3,.art-body h4,.art-body h5,.art-body h6,.art-body li');
+  if(!block)return;
+  for(const [src,s] of InlineAudio.active){
+    const idx=s.segments.findIndex(seg=>seg.el===block);
+    if(idx<0)continue;
+    const r=s.segTimeRanges[idx];
+    if(r&&(r.end-r.start)>0.02){
+      s.audio.currentTime=r.start;
+      _iaResetScrollIntent();
+      if(s.audio.paused)s.audio.play();
+    }else{
+      showToast('该段没有对应的音频',1800);
+    }
+    break;
+  }
+});
+
+// ── 自定义音频播放器（替换原生 controls）──────────
+// Themed play/scrub/speed controls + cross-visit resume + Media Session.
+const IA_SPEEDS=[1,1.25,1.5,1.75,2,0.75];
+function _iaFmtTime(s){if(!isFinite(s)||s<0)s=0;const m=Math.floor(s/60),ss=Math.floor(s%60),hh=Math.floor(m/60);return hh>0?hh+':'+String(m%60).padStart(2,'0')+':'+String(ss).padStart(2,'0'):m+':'+String(ss).padStart(2,'0');}
+function _iaPosKey(rel){return 'iaPos:'+rel;}
+function _iaSavePos(audio,rel){
+  try{
+    if(!rel)return;
+    const t=audio.currentTime||0;
+    if(t>20&&(!audio.duration||t<audio.duration-15))localStorage.setItem(_iaPosKey(rel),JSON.stringify({t:Math.floor(t),ts:Date.now()}));
+    else if(audio.duration&&t>=audio.duration-15)localStorage.removeItem(_iaPosKey(rel));
+  }catch(e){}
+}
+function _iaUpdateMediaSession(audio,rel){
+  if(!('mediaSession' in navigator))return;
+  try{
+    const titleEl=document.querySelector('.art-hd h1');
+    const parts=(rel||'').split('/');
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:titleEl?titleEl.textContent:(parts[parts.length-1]||'音频'),
+      artist:parts.length>1?parts[parts.length-2]:'知识库阅读器',
+      album:'知识库阅读器'
+    });
+    navigator.mediaSession.setActionHandler('play',()=>audio.play());
+    navigator.mediaSession.setActionHandler('pause',()=>audio.pause());
+    navigator.mediaSession.setActionHandler('seekbackward',(d)=>{audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||10));});
+    navigator.mediaSession.setActionHandler('seekforward',(d)=>{audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||10));});
+    try{navigator.mediaSession.setActionHandler('seekto',(d)=>{if(d&&d.seekTime!=null)audio.currentTime=d.seekTime;});}catch(e){}
+  }catch(e){}
+}
+function initAudioPlayers(){
+  document.querySelectorAll('.art-body .audio-embed').forEach(embed=>{
+    if(embed.dataset.iaWired)return;
+    embed.dataset.iaWired='1';
+    const audio=embed.querySelector('audio');
+    const player=embed.querySelector('.ia-player');
+    if(!audio||!player)return;
+    const rel=embed.dataset.audioPath||'';
+    const btnPlay=player.querySelector('.ia-play');
+    const btnSpeed=player.querySelector('.ia-speed');
+    const track=player.querySelector('.ia-track');
+    const fill=player.querySelector('.ia-fill');
+    const cur=player.querySelector('.ia-cur');
+    const dur=player.querySelector('.ia-dur');
+    const speedOf=()=>{const v=parseFloat(localStorage.getItem('iaSpeed'));return IA_SPEEDS.includes(v)?v:1;};
+    audio.playbackRate=speedOf();
+    btnSpeed.textContent=speedOf()+'×';
+    btnSpeed.addEventListener('click',()=>{
+      const next=IA_SPEEDS[(IA_SPEEDS.indexOf(speedOf())+1)%IA_SPEEDS.length];
+      try{localStorage.setItem('iaSpeed',String(next));}catch(e){}
+      document.querySelectorAll('.art-body .audio-embed audio').forEach(a=>{a.playbackRate=next;});
+      document.querySelectorAll('.art-body .ia-speed').forEach(b=>{b.textContent=next+'×';});
+    });
+    btnPlay.addEventListener('click',()=>{if(audio.paused)audio.play();else audio.pause();});
+    audio.addEventListener('play',()=>{btnPlay.textContent='⏸';_iaUpdateMediaSession(audio,rel);});
+    audio.addEventListener('pause',()=>{btnPlay.textContent='▶';_iaSavePos(audio,rel);});
+    audio.addEventListener('ended',()=>{btnPlay.textContent='▶';try{localStorage.removeItem(_iaPosKey(rel));}catch(e){}});
+    audio.addEventListener('loadedmetadata',()=>{
+      dur.textContent=_iaFmtTime(audio.duration);
+      // Cross-visit resume: long lectures used to restart at 0 on every open.
+      try{
+        const saved=JSON.parse(localStorage.getItem(_iaPosKey(rel))||'null');
+        if(saved&&saved.t>20&&saved.t<audio.duration-15&&audio.currentTime<1)audio.currentTime=saved.t;
+      }catch(e){}
+      updateUI();
+    });
+    let lastSave=0;
+    const updateUI=()=>{
+      const d=audio.duration||0,t=audio.currentTime||0;
+      fill.style.width=(d?Math.min(100,t/d*100):0)+'%';
+      cur.textContent=_iaFmtTime(t);
+      if(!audio.paused&&Date.now()-lastSave>5000){lastSave=Date.now();_iaSavePos(audio,rel);}
+    };
+    audio.addEventListener('timeupdate',updateUI);
+    let scrubbing=false;
+    const seekFromEvent=(e)=>{
+      const r=track.getBoundingClientRect();
+      const ratio=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+      if(audio.duration){audio.currentTime=ratio*audio.duration;updateUI();}
+    };
+    track.addEventListener('pointerdown',(e)=>{scrubbing=true;try{track.setPointerCapture(e.pointerId);}catch(err){}seekFromEvent(e);});
+    track.addEventListener('pointermove',(e)=>{if(scrubbing)seekFromEvent(e);});
+    track.addEventListener('pointerup',()=>{scrubbing=false;});
+    track.addEventListener('pointercancel',()=>{scrubbing=false;});
+  });
+}
+// Persist playback position when the tab hides (phone lock, app switch)
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState!=='hidden')return;
+  document.querySelectorAll('.art-body .audio-embed').forEach(em=>{
+    const a=em.querySelector('audio');
+    if(a&&a.currentTime>0)_iaSavePos(a,em.dataset.audioPath||'');
+  });
 });
 
 // ── 内嵌 MP3 字幕跟读 ─────────────────────────
@@ -3078,11 +3261,20 @@ const InlineAudio={
   async toggleFollowAlong(btn){
     const audioSrc=btn.dataset.audioSrc;
     const audioRel=btn.dataset.audioRel;
-    // If already active, deactivate
+    // Already active: while paused the button reads「▶️ 继续播放」— honor it
+    // (it used to tear the whole session down instead of resuming). Teardown
+    // stays on the playing-state label「⏹ 关闭跟读」.
     if(this.active.has(audioSrc)){
+      const s=this.active.get(audioSrc);
+      if(s.audio.paused&&!s.audio.ended){s.audio.play();return;}
       this.deactivate(audioSrc);
       return;
     }
+    // In-flight guard: a repeat click or an article switch during the async
+    // setup below must not attach a session to a stale/destroyed DOM.
+    const reqToken=(this._reqToken=(this._reqToken||0)+1);
+    const reqArticle=curId;
+    const stale=()=>this._reqToken!==reqToken||curId!==reqArticle||!btn.isConnected;
     // Find the audio element in the same .audio-embed container
     const embed=btn.closest('.audio-embed');
     if(!embed)return;
@@ -3093,6 +3285,7 @@ const InlineAudio={
     btn.disabled=true;
     try{
       const vttUrl=await this.ensureVTT(audioRel,btn);
+      if(stale())return;
       if(!vttUrl){
         btn.textContent='🔤 字幕跟读';
         btn.disabled=false;
@@ -3102,6 +3295,7 @@ const InlineAudio={
       const vttR=await fetch(vttUrl,{cache:'no-store'});
       if(!vttR.ok)throw new Error('VTT load failed');
       const vttText=await vttR.text();
+      if(stale())return;
       const cues=TTS.parseVTT(vttText);
       if(!cues.length){
         showToast('字幕文件为空',2000);
@@ -3114,6 +3308,8 @@ const InlineAudio={
       const segments=collectArticleSegments();
       // Build segment map: try semantic alignment first, fall back to LCS
       let segMap,segTimeRanges;
+      let alignNote='';
+      btn.textContent='🧭 对齐中…';
       try{
         // Try embedding-based semantic alignment (much better for oral vs written text)
         const alignR=await fetch('/api/align',{
@@ -3122,6 +3318,7 @@ const InlineAudio={
           body:JSON.stringify({articleId:curId,vttPath:btn.dataset.audioRel.replace(/\.[^.]+$/,'.vtt'),segments:segments.map(s=>s.text)})
         });
         const alignD=await alignR.json();
+        if(stale())return;
         if(alignD.ok&&alignD.segMap&&alignD.segTimeRanges){
           // Validate: segTimeRanges length must match frontend segment count
           if(alignD.segTimeRanges.length!==segments.length){
@@ -3131,13 +3328,25 @@ const InlineAudio={
           segMap=alignD.segMap;
           segTimeRanges=alignD.segTimeRanges;
           console.log('[inline-audio] Using embedding alignment:',alignD.stats||'cached');
-          showToast('\u2728 \u8bed\u4e49\u5bf9\u9f50\u5df2\u52a0\u8f7d'+(alignD.cached?' (\u7f13\u5b58)':''),2000);
+          alignNote=alignD.cached?'\uff08\u7f13\u5b58\uff09':'';
+          if(alignD.legacyVtt){
+            // whisper-era VTT: expose the manual re-transcribe entry and note
+            // whether a background upgrade is already running.
+            const rb=embed.querySelector('.audio-retrans-btn');
+            if(rb)rb.style.display='';
+            alignNote+=alignD.retranscribing?'\uff5c\ud83d\udcfc \u65e7\u5b57\u5e55\u540e\u53f0\u91cd\u8f6c\u4e2d':'\uff5c\ud83d\udcfc \u65e7\u5b57\u5e55\uff0c\u53ef\u70b9\u300c\u21bb \u91cd\u8f6c\u5b57\u5e55\u300d\u5347\u7ea7';
+          }
         }else{
           throw new Error(alignD.error||'alignment failed');
         }
       }catch(alignErr){
+        if(stale())return;
         console.log('[inline-audio] Embedding alignment unavailable, using LCS:',alignErr.message);
         ({segMap,segTimeRanges}=this.buildSegMap(cues,segments));
+        // Surface the downgrade \u2014 it used to be console-only, leaving the
+        // resulting highlight mismatches unexplained.
+        showToast('\u26a0\ufe0f \u8bed\u4e49\u5bf9\u9f50\u4e0d\u53ef\u7528\uff0c\u5df2\u964d\u7ea7\u57fa\u7840\u5bf9\u9f50\uff08\u9ad8\u4eae\u53ef\u80fd\u4e0d\u51c6\uff09',3500);
+        alignNote='\uff08\u57fa\u7840\u5bf9\u9f50\uff09';
       }
       // Set up timeupdate listener
       let curIdx=-1;
@@ -3154,6 +3363,9 @@ const InlineAudio={
         }
         if(hi>=0){
           sIdx=hi;
+          // Skip null / zero-width entries (non-narrated panel headings pinned
+          // at a boundary): rest on the nearest earlier narrated segment.
+          while(sIdx>0&&(!segTimeRanges[sIdx]||segTimeRanges[sIdx].end-segTimeRanges[sIdx].start<0.02))sIdx--;
         }else if(segTimeRanges.length>0){
           sIdx=0;
         }
@@ -3168,10 +3380,19 @@ const InlineAudio={
         if(sIdx>=0&&sIdx!==curIdx){
           curIdx=sIdx;
           // Clear old highlights from this session
-          document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
+          document.querySelectorAll('.inline-audio-hl').forEach(el=>{el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused');el.style.removeProperty('--ia-progress');});
           if(segments[sIdx]&&segments[sIdx].el){
             segments[sIdx].el.classList.add('tts-highlight','inline-audio-hl');
-            scrollElIntoView(segments[sIdx].el);
+            _iaAutoScroll(segments[sIdx].el);
+          }
+        }
+        // Sentence-level progress line inside the highlighted paragraph
+        // (time-driven, so it stays honest even on error-ridden legacy VTTs)
+        if(curIdx>=0&&segments[curIdx]&&segments[curIdx].el){
+          const pr=segTimeRanges[curIdx];
+          if(pr&&pr.end>pr.start){
+            const pct=Math.max(0,Math.min(100,(t-pr.start)/(pr.end-pr.start)*100));
+            segments[curIdx].el.style.setProperty('--ia-progress',pct.toFixed(1)+'%');
           }
         }
       };
@@ -3198,7 +3419,8 @@ const InlineAudio={
       btn.textContent='⏹ 关闭跟读';
       btn.classList.add('active');
       btn.disabled=false;
-      showToast('✅ 字幕跟读已开启');
+      _iaResetScrollIntent();
+      showToast('✅ 字幕跟读已开启'+alignNote,alignNote.indexOf('📼')>=0?4000:2000);
     }catch(e){
       console.error('[inline-audio]',e);
       showToast('❌ '+e.message,3000);
@@ -3214,10 +3436,11 @@ const InlineAudio={
     s.audio.removeEventListener('ended',s.onEnded);
     s.audio.removeEventListener('play',s.onPlay);
     s.audio.removeEventListener('pause',s.onPause);
-    document.querySelectorAll('.inline-audio-hl').forEach(el=>el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused'));
+    document.querySelectorAll('.inline-audio-hl').forEach(el=>{el.classList.remove('inline-audio-hl','tts-highlight','inline-audio-paused');el.style.removeProperty('--ia-progress');});
     s.btn.textContent='🔤 字幕跟读';
     s.btn.classList.remove('active');
     this.active.delete(audioSrc);
+    if(this.active.size===0)_iaResetScrollIntent();
   },
 
   // Seek to text position in active inline audio (called from share bar)
@@ -3251,13 +3474,16 @@ const InlineAudio={
       if(bestScore>=3)sIdx=bestIdx;
     }
     if(sIdx<0)return false;
-    // Seek audio
-    if(segTimeRanges[sIdx]){
-      audio.currentTime=segTimeRanges[sIdx].start;
+    // Seek audio (zero-width ranges are non-narrated panels — nothing to hear)
+    const r=segTimeRanges[sIdx];
+    if(r&&(r.end-r.start)>0.02){
+      audio.currentTime=r.start;
+      _iaResetScrollIntent();
       if(audio.paused)audio.play();
-      console.log('[inline-audio] seekToText: segment',sIdx,'time',segTimeRanges[sIdx].start);
+      console.log('[inline-audio] seekToText: segment',sIdx,'time',r.start);
       return true;
     }
+    showToast('该段没有对应的音频',1800);
     return false;
   },
 
@@ -3271,7 +3497,7 @@ const InlineAudio={
       if(check.ok)return vttUrl;
     }catch(e){}
     // VTT doesn't exist, request transcription
-    btn.textContent='⏳ 转录中...';
+    btn.textContent='🎙 转写中…';
     const r=await fetch('/api/transcribe',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -3283,18 +3509,21 @@ const InlineAudio={
       return null;
     }
     if(d.status==='done'||d.cached)return vttUrl;
-    // Poll for completion
+    // Poll for completion. The server allows a transcription up to 20 min
+    // (long lectures); the old 3-min client cutoff reported a fake「转录超时」
+    // while the job was still running fine.
     return new Promise((resolve)=>{
-      let attempts=0;
-      const maxAttempts=180; // ~3 minutes at 1s intervals
+      const startedAt=Date.now();
+      const maxMs=21*60*1000;
       const poll=async()=>{
-        attempts++;
-        if(attempts>maxAttempts){
+        const elapsed=Date.now()-startedAt;
+        if(elapsed>maxMs){
           showToast('❌ 转录超时',3000);
           resolve(null);
           return;
         }
-        btn.textContent='⏳ 转录中 ('+attempts+'s)...';
+        const mm=Math.floor(elapsed/60000),ss=Math.floor(elapsed%60000/1000);
+        btn.textContent='🎙 转写中 '+mm+':'+String(ss).padStart(2,'0')+'（可先离开）';
         try{
           const sr=await fetch('/api/transcribe/status',{
             method:'POST',
@@ -3312,9 +3541,9 @@ const InlineAudio={
             return;
           }
         }catch(e){}
-        setTimeout(poll,1000);
+        setTimeout(poll,2000);
       };
-      setTimeout(poll,1000);
+      setTimeout(poll,1500);
     });
   },
 
@@ -3839,6 +4068,41 @@ ct.addEventListener('click',function(e){
   const subBtn=e.target.closest('.audio-sub-btn');
   if(subBtn){
     InlineAudio.toggleFollowAlong(subBtn);
+    return;
+  }
+  // Manual re-transcription of a legacy (whisper-era) VTT
+  const rBtn=e.target.closest('.audio-retrans-btn');
+  if(rBtn&&!rBtn.disabled){
+    const audioRel=rBtn.dataset.audioRel;
+    rBtn.disabled=true;
+    rBtn.textContent='🎙 重转中…';
+    fetch('/api/transcribe',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({audioPath:audioRel,force:true})
+    }).then(r=>r.json()).then(d=>{
+      if(!d.ok){
+        showToast('❌ 重转失败: '+(d.error||''),3000);
+        rBtn.disabled=false;rBtn.textContent='↻ 重转字幕';
+        return;
+      }
+      showToast('🎙 已开始重新转写（约几分钟），完成后重开跟读生效',3500);
+      const chk=setInterval(async()=>{
+        if(!rBtn.isConnected){clearInterval(chk);return;}
+        try{
+          const sr=await fetch('/api/transcribe/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audioPath:audioRel})});
+          const sd=await sr.json();
+          if(sd.status==='done'){
+            clearInterval(chk);
+            rBtn.textContent='✅ 已重转';
+            showToast('✅ 字幕重转完成，重新开启跟读即可生效',3500);
+          }
+        }catch(err){}
+      },5000);
+      setTimeout(()=>clearInterval(chk),22*60*1000);
+    }).catch(()=>{
+      rBtn.disabled=false;rBtn.textContent='↻ 重转字幕';
+    });
     return;
   }
 });

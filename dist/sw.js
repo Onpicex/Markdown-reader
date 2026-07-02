@@ -5,7 +5,7 @@
 // from the network and never cached. Only the static shell (HTML + vendor JS +
 // icons) is cached, using stale-while-revalidate so a new deploy is picked up
 // on the next load without ever serving a hard-stale page.
-const CACHE = 'or-shell-v12';
+const CACHE = 'or-shell-v13';
 const SHELL = [
   '/', '/index.html',
   '/manifest.webmanifest',
