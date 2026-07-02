@@ -49,13 +49,28 @@ function saveConfig(cfg) {
 let config = loadConfig();
 
 // Alignment cache version — single source of truth shared with align.py via
-// align-version.json. Bump it there; both sides pick it up (no more dual
-// hard-coded literals drifting out of sync).
-function loadAlignVersion() {
-  try { return Number(JSON.parse(fs.readFileSync(path.join(DIR, 'align-version.json'), 'utf-8')).version) || 14; }
-  catch { return 14; }
+// align-version.json. Bump it there; both sides pick it up. Re-read per
+// request (mtime-cached, <1ms): align.py reads the file on every run, so a
+// startup-time const here would go permanently stale after a bump without a
+// server restart — every cache compare would then mismatch and EVERY article
+// open would silently re-run the ~10s alignment and rewrite its cache file.
+let _alignVerCache = { v: 14, mtime: -1 };
+function alignVersion() {
+  try {
+    const p = path.join(DIR, 'align-version.json');
+    const mt = fs.statSync(p).mtimeMs;
+    if (mt !== _alignVerCache.mtime) {
+      _alignVerCache = { v: Number(JSON.parse(fs.readFileSync(p, 'utf-8')).version) || 14, mtime: mt };
+    }
+  } catch { /* keep last known value */ }
+  return _alignVerCache.v;
 }
-const ALIGN_VERSION = loadAlignVersion();
+
+function sha1File(p) {
+  const h = crypto.createHash('sha1');
+  h.update(fs.readFileSync(p));
+  return h.digest('hex');
+}
 
 // Path-containment check that respects directory boundaries. A bare
 // `child.startsWith(base)` is wrong: "/x/vault-backup" startsWith "/x/vault"
@@ -146,7 +161,293 @@ function rotateSessionSecret() {
   _secretRef.value = v;
 }
 const _transcribeInProgress = new Set();
+const _transcribeProcs = new Set();      // live transcription child procs (group-killed on shutdown)
+const _retranscribeFailed = new Set();   // audio paths whose auto re-transcribe failed this run
+const _alignInFlight = new Map();        // cachePath → Promise (dedup concurrent /api/align)
 const _ttsInProgress = new Map(); // baseName → Promise of result
+
+// ── Alignment daemon ────────────────────────────────
+// align.py --daemon keeps the embedding model warm, so per-article alignment
+// costs <1s instead of ~10s of torch import + model load per spawn (measured
+// modelLoadTime across the library: 8.0-16.1s, alignTime 0.3-3.9s). Managed
+// lazily: spawned on first use, killed after 10 min idle; any failure falls
+// back to the classic one-shot spawn path below.
+const ALIGN_DAEMON_IDLE_MS = 10 * 60 * 1000;
+let _alignDaemon = null;
+
+function _killAlignDaemon(reason) {
+  const d = _alignDaemon;
+  if (!d) return;
+  _alignDaemon = null;
+  clearTimeout(d.idleTimer);
+  for (const [, p] of d.pending) { clearTimeout(p.timer); p.reject(new Error('align daemon terminated: ' + reason)); }
+  d.pending.clear();
+  try { d.proc.kill(); } catch {}
+}
+
+function _ensureAlignDaemon() {
+  if (_alignDaemon) return _alignDaemon;
+  const proc = spawn(PYTHON, [path.join(DIR, 'align.py'), '--daemon'], {
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+  });
+  const d = { proc, pending: new Map(), nextId: 1, buf: '', stderr: '', idleTimer: null };
+  d.ready = new Promise((resolve, reject) => { d._readyResolve = resolve; d._readyReject = reject; });
+  d.ready.catch(() => {}); // avoid unhandled-rejection if no request is waiting
+  const readyTimer = setTimeout(() => {
+    d._readyReject(new Error('align daemon start timeout'));
+    if (_alignDaemon === d) _killAlignDaemon('start timeout');
+  }, 300000);
+  proc.stdout.on('data', chunk => {
+    d.buf += chunk.toString();
+    let nl;
+    while ((nl = d.buf.indexOf('\n')) >= 0) {
+      const line = d.buf.slice(0, nl).trim();
+      d.buf = d.buf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (msg.ready) {
+        clearTimeout(readyTimer);
+        console.log(`[align] daemon ready (model load ${msg.modelLoadTime}s)`);
+        d._readyResolve();
+        continue;
+      }
+      const p = d.pending.get(msg.id);
+      if (p) { d.pending.delete(msg.id); clearTimeout(p.timer); p.resolve(msg); }
+    }
+  });
+  proc.stderr.on('data', c => { d.stderr = (d.stderr + c.toString()).slice(-2000); });
+  proc.on('exit', (code) => {
+    if (_alignDaemon === d) {
+      if (d.pending.size) console.warn(`[align] daemon exited code=${code}: ${d.stderr.slice(-300)}`);
+      _killAlignDaemon('exit ' + code);
+    }
+  });
+  proc.on('error', (e) => {
+    d._readyReject(e);
+    if (_alignDaemon === d) _killAlignDaemon(e.message);
+  });
+  _alignDaemon = d;
+  _touchDaemonIdle();
+  return d;
+}
+
+function _touchDaemonIdle() {
+  const d = _alignDaemon;
+  if (!d) return;
+  clearTimeout(d.idleTimer);
+  d.idleTimer = setTimeout(() => {
+    if (!_alignDaemon) return;
+    if (_alignDaemon.pending.size === 0) _killAlignDaemon('idle');
+    else _touchDaemonIdle();
+  }, ALIGN_DAEMON_IDLE_MS);
+}
+
+async function _alignViaDaemon(article, vtt, out, segments) {
+  const d = _ensureAlignDaemon();
+  await d.ready;
+  const msg = await new Promise((resolve, reject) => {
+    const id = d.nextId++;
+    const timer = setTimeout(() => { d.pending.delete(id); reject(new Error('align daemon request timeout')); }, 120000);
+    d.pending.set(id, { resolve, reject, timer });
+    try {
+      d.proc.stdin.write(JSON.stringify({ id, article, vtt, out, segments: segments || null }) + '\n');
+    } catch (e) { d.pending.delete(id); clearTimeout(timer); reject(e); }
+    _touchDaemonIdle();
+  });
+  _touchDaemonIdle();
+  if (!msg.ok) throw new Error(msg.error || 'align failed');
+  return msg.stats;
+}
+
+function _alignOneShot(article, vtt, out, segments) {
+  return new Promise((resolve, reject) => {
+    const alignArgs = [path.join(DIR, 'align.py'), article, vtt, out];
+    let segTmp = null;
+    if (segments) {
+      try {
+        segTmp = path.join(require('os').tmpdir(), `align-segs-${process.pid}-${Date.now()}.json`);
+        fs.writeFileSync(segTmp, JSON.stringify(segments));
+        alignArgs.splice(1, 0, '--segments', segTmp);
+      } catch (e) { segTmp = null; }
+    }
+    const cleanupSeg = () => { if (segTmp) { try { fs.unlinkSync(segTmp); } catch {} segTmp = null; } };
+    // 300s (not 60s): a fresh install downloads the embedding model on first
+    // run, which blows well past 60s and used to guarantee a timeout loop.
+    const proc = spawn(PYTHON, alignArgs, {
+      timeout: 300000,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+    let stderr = '';
+    proc.stderr.on('data', d => stderr += d.toString());
+    proc.on('close', (code) => {
+      cleanupSeg();
+      if (code === 0 && fs.existsSync(out)) resolve(null);
+      else reject(new Error('Alignment failed: ' + stderr.slice(-200)));
+    });
+    proc.on('error', (err) => { cleanupSeg(); reject(new Error('Spawn failed: ' + err.message)); });
+  });
+}
+
+async function _generateAlignment(article, vtt, out, segments) {
+  const t0 = Date.now();
+  try {
+    const stats = await _alignViaDaemon(article, vtt, out, segments);
+    console.log(`[align] generated (daemon ${Date.now() - t0}ms, segsHit=${stats.segsHit}/${stats.segments}): ${path.basename(out)}`);
+    return;
+  } catch (e) {
+    console.warn('[align] daemon path failed, falling back to one-shot spawn:', e.message);
+  }
+  await _alignOneShot(article, vtt, out, segments);
+  console.log(`[align] generated (spawn ${Date.now() - t0}ms): ${path.basename(out)}`);
+}
+
+// Effective hit ratio of a cached alignment. Bonus credit for segments that
+// don't appear in the audio (footnotes, 划重点 summary lists) — they correctly
+// stay unmapped. Trailing non-narrated segments are null (align.py leaves them
+// unfilled so the follow-along highlight doesn't jump to the appendix); legacy
+// caches collapsed them to a point at audioEnd. Both count as expected-unmapped
+// tail so footnote-heavy articles aren't judged low-quality forever.
+function _alignQuality(cached) {
+  const st = cached.stats || {};
+  const tr = cached.segTimeRanges || [];
+  let tailUnmapped = 0;
+  if (tr.length) {
+    let audioEnd = null;
+    for (let i = tr.length - 1; i >= 0; i--) { if (tr[i]) { audioEnd = tr[i].end; break; } }
+    for (let i = tr.length - 1; i >= 0; i--) {
+      const r = tr[i];
+      if (!r) { tailUnmapped++; continue; }
+      if (audioEnd !== null && Math.abs(r.start - audioEnd) < 0.01 && Math.abs(r.end - audioEnd) < 0.01) { tailUnmapped++; continue; }
+      break;
+    }
+  }
+  const effSegments = Math.max(1, (st.segments || 0) - tailUnmapped);
+  return { hitRatio: (st.segsHit || 0) / effSegments, effSegments };
+}
+
+// VTTs written by qwen_vtt.py carry a "NOTE transcriber: qwen3-asr" line;
+// anything without it predates the engine switch (whisper era, 2026-06-20)
+// and is known to contain homophone errors and repetition loops.
+function _isLegacyVtt(vttPath) {
+  try {
+    const fd = fs.openSync(vttPath, 'r');
+    const buf = Buffer.alloc(300);
+    const n = fs.readSync(fd, buf, 0, 300, 0);
+    fs.closeSync(fd);
+    return !buf.toString('utf-8', 0, n).includes('NOTE transcriber: qwen');
+  } catch { return false; }
+}
+
+function _findAudioForVtt(vttPath) {
+  for (const ext of ['.mp3', '.m4a', '.wav', '.ogg']) {
+    const p = vttPath.replace(/\.vtt$/i, ext);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+// Start one transcription (shared by /api/transcribe and the legacy-VTT
+// auto-upgrade queue). Returns 'cached' | 'in_progress' | 'started'.
+//
+// Engine: Qwen3-ASR-1.7B (MLX, 8bit) via qwen_vtt.py. 2026-06-20 — replaced
+// mlx_whisper-large-v3-turbo, which hallucinated fabricated ad text
+// ("请不吝点赞订阅...") and repetition loops on long Chinese lectures. Qwen is
+// hallucination-free, ~4x faster than fp16, and qwen_vtt.py does ASR +
+// per-chunk punctuation merge + natural (clause-level) cue grouping. It
+// transcribes in its own temp dir, so the dot-free tmp path we hand it is
+// honored verbatim (no mlx output-name multi-dot truncation); we then rename
+// it to the final .vtt.
+function _startTranscription(resolved, { force = false, auto = false } = {}) {
+  const vttPath = resolved.replace(/\.[^.]+$/, '.vtt');
+  if (fs.existsSync(vttPath) && !force) return 'cached';
+  if (_transcribeInProgress.has(resolved)) return 'in_progress';
+  _transcribeInProgress.add(resolved);
+  const outputDir = path.dirname(resolved);
+  const qwenAsrBin = config.qwenAsrBin || process.env.QWEN_ASR_BIN || 'mlx-qwen3-asr';
+  const qwenScript = path.join(DIR, 'qwen_vtt.py');
+  const tmpStem = 'ocw_vtt_' + crypto.randomBytes(4).toString('hex');
+  const tmpVtt = path.join(outputDir, tmpStem + '.vtt');
+  // detached → own process group, so the timeout/shutdown kill below reaches
+  // the mlx-qwen3-asr GRANDCHILD too. A plain child SIGTERM (the old
+  // spawn-option timeout) only killed the qwen_vtt.py middle layer and left
+  // the model process orphaned, burning GPU with nobody to collect its output.
+  const proc = spawn(PYTHON, [qwenScript, resolved, tmpVtt], {
+    detached: true,
+    env: { ...process.env, QWEN_ASR_BIN: qwenAsrBin }
+  });
+  _transcribeProcs.add(proc);
+  const killTimer = setTimeout(() => {
+    console.error('[transcribe] timeout (20min), killing process group:', path.basename(resolved));
+    try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
+    setTimeout(() => { try { process.kill(-proc.pid, 'SIGKILL'); } catch {} }, 10000);
+  }, 1200000);
+  let stderr = '';
+  proc.stderr.on('data', d => stderr += d.toString());
+  proc.on('close', (code) => {
+    clearTimeout(killTimer);
+    _transcribeProcs.delete(proc);
+    _transcribeInProgress.delete(resolved);
+    if (code === 0) {
+      try {
+        if (fs.existsSync(tmpVtt)) {
+          if (fs.existsSync(vttPath)) {
+            // Preserve the old VTT before overwriting: whisper-era VTTs can't
+            // be regenerated (those models are gone from this machine).
+            try {
+              const bakDir = path.join(DIR, 'archive', 'vtt-backups', path.basename(outputDir));
+              fs.mkdirSync(bakDir, { recursive: true });
+              fs.copyFileSync(vttPath, path.join(bakDir, path.basename(vttPath)));
+            } catch (e) { console.warn('[transcribe] VTT backup failed:', e.message); }
+            fs.unlinkSync(vttPath);
+          }
+          fs.renameSync(tmpVtt, vttPath);
+          console.log(`[transcribe] OK${force ? ' (re-transcribed)' : ''}:`, path.basename(resolved));
+        } else {
+          console.error('[transcribe] OK exit but tmp vtt missing:', tmpVtt);
+        }
+      } catch (e) {
+        console.error('[transcribe] rename failed:', e.message);
+      }
+    } else {
+      console.error('[transcribe] failed:', path.basename(resolved), stderr.slice(-300));
+      if (auto) _retranscribeFailed.add(resolved);
+      try { if (fs.existsSync(tmpVtt)) fs.unlinkSync(tmpVtt); } catch {}
+    }
+  });
+  proc.on('error', (err) => {
+    clearTimeout(killTimer);
+    _transcribeProcs.delete(proc);
+    _transcribeInProgress.delete(resolved);
+    if (auto) _retranscribeFailed.add(resolved);
+    console.error('[transcribe] spawn error:', err.message);
+  });
+  return 'started';
+}
+
+// Legacy-VTT lazy upgrade: when follow-along is activated on an article whose
+// VTT predates the Qwen engine, quietly re-transcribe it in the background
+// (one at a time, only for articles the user demonstrably uses). The next
+// activation then picks up the better VTT + a fresh alignment via the normal
+// mtime staleness path.
+function _autoRetranscribeLegacy(vttPath) {
+  const audio = _findAudioForVtt(vttPath);
+  if (!audio || _retranscribeFailed.has(audio)) return false;
+  if (_transcribeInProgress.size > 0) return false; // at most one; retry on a later activation
+  console.log('[transcribe] legacy VTT queued for re-transcription:', path.basename(vttPath));
+  return _startTranscription(audio, { force: true, auto: true }) === 'started';
+}
+
+// Kill the align daemon and any live transcription process groups on exit —
+// launchd restarts (kickstart -k) would otherwise orphan the mlx grandchild.
+function _reapChildren() {
+  _killAlignDaemon('server shutdown');
+  for (const p of _transcribeProcs) {
+    try { process.kill(-p.pid, 'SIGTERM'); } catch {}
+  }
+}
+process.on('SIGTERM', () => { _reapChildren(); process.exit(0); });
+process.on('SIGINT', () => { _reapChildren(); process.exit(0); });
 // Rate limiting state
 const _authFails = new Map();     // ip → [timestamp]
 const _sseConnsByIp = new Map();  // ip → count
@@ -1017,12 +1318,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   // /api/transcribe - POST transcribe audio file with Qwen3-ASR (qwen_vtt.py)
-  // Tracks in-progress transcriptions to avoid duplicate work
+  // Tracks in-progress transcriptions to avoid duplicate work.
+  // {force:true} re-transcribes even when a VTT exists (legacy whisper-era
+  // VTT upgrade); the old VTT is backed up under archive/vtt-backups/ first —
+  // whisper-era VTTs are irreproducible (the whisper models are gone).
   if (pathname === '/api/transcribe' && req.method === 'POST') {
     if (!isAuthed(req)) { jsonReply(res, 401, { error: 'Unauthorized' }); return; }
     const body = await readBody(req);
     try {
-      const { audioPath } = JSON.parse(body);
+      const { audioPath, force } = JSON.parse(body);
       if (!audioPath) {
         jsonReply(res, 400, { ok: false, error: 'Missing audioPath' });
         return;
@@ -1036,64 +1340,11 @@ const server = http.createServer(async (req, res) => {
         jsonReply(res, 404, { ok: false, error: 'Audio file not found' });
         return;
       }
-      // VTT output path: same dir, same name, .vtt extension
-      const vttPath = resolved.replace(/\.[^.]+$/, '.vtt');
-      const vttRelative = path.relative(config.vault, vttPath);
-      // If VTT already exists, return immediately
-      if (fs.existsSync(vttPath)) {
-        jsonReply(res, 200, { ok: true, vttPath: vttRelative, cached: true });
-        return;
-      }
-      // Check if transcription is already in progress
-      if (_transcribeInProgress.has(resolved)) {
-        jsonReply(res, 200, { ok: true, status: 'in_progress', vttPath: vttRelative });
-        return;
-      }
-      // Start transcription asynchronously
-      _transcribeInProgress.add(resolved);
-      const outputDir = path.dirname(resolved);
-      // Transcription engine: Qwen3-ASR-1.7B (MLX, 8bit) via qwen_vtt.py.
-      // 2026-06-20 — replaced mlx_whisper-large-v3-turbo, which hallucinated
-      // fabricated ad text ("请不吝点赞订阅...") and repetition loops on long
-      // Chinese lectures. Qwen is hallucination-free, ~4x faster than fp16,
-      // and qwen_vtt.py does ASR + per-chunk punctuation merge + natural
-      // (clause-level) cue grouping. It transcribes in its own temp dir, so
-      // the dot-free tmp path we hand it is honored verbatim (no mlx
-      // output-name multi-dot truncation); we then rename it to the final .vtt.
-      const qwenAsrBin = config.qwenAsrBin || process.env.QWEN_ASR_BIN || 'mlx-qwen3-asr';
-      const qwenScript = path.join(DIR, 'qwen_vtt.py');
-      const tmpStem = 'ocw_vtt_' + crypto.randomBytes(4).toString('hex');
-      const tmpVtt = path.join(outputDir, tmpStem + '.vtt');
-      const proc = spawn(PYTHON, [qwenScript, resolved, tmpVtt], {
-        timeout: 1200000,
-        env: { ...process.env, QWEN_ASR_BIN: qwenAsrBin }
-      });
-      let stderr = '';
-      proc.stderr.on('data', d => stderr += d.toString());
-      proc.on('close', (code) => {
-        _transcribeInProgress.delete(resolved);
-        if (code === 0) {
-          try {
-            if (fs.existsSync(tmpVtt)) {
-              if (fs.existsSync(vttPath)) fs.unlinkSync(vttPath);
-              fs.renameSync(tmpVtt, vttPath);
-              console.log('[transcribe] OK:', audioPath);
-            } else {
-              console.error('[transcribe] OK exit but tmp vtt missing:', tmpVtt);
-            }
-          } catch (e) {
-            console.error('[transcribe] rename failed:', e.message);
-          }
-        } else {
-          console.error('[transcribe] failed:', audioPath, stderr.slice(-300));
-          try { if (fs.existsSync(tmpVtt)) fs.unlinkSync(tmpVtt); } catch {}
-        }
-      });
-      proc.on('error', (err) => {
-        _transcribeInProgress.delete(resolved);
-        console.error('[transcribe] spawn error:', err.message);
-      });
-      jsonReply(res, 202, { ok: true, status: 'started', vttPath: vttRelative });
+      const vttRelative = path.relative(config.vault, resolved.replace(/\.[^.]+$/, '.vtt'));
+      const status = _startTranscription(resolved, { force: !!force });
+      if (status === 'cached') jsonReply(res, 200, { ok: true, vttPath: vttRelative, cached: true });
+      else if (status === 'in_progress') jsonReply(res, 200, { ok: true, status: 'in_progress', vttPath: vttRelative });
+      else jsonReply(res, 202, { ok: true, status: 'started', vttPath: vttRelative });
     } catch (e) {
       console.error('[transcribe] error:', e.message);
       jsonReply(res, 500, { ok: false, error: 'Transcription failed: ' + e.message });
@@ -1116,10 +1367,12 @@ const server = http.createServer(async (req, res) => {
       const vttResolved = resolveVaultPath(audioPath.replace(/\.[^.]+$/, '.vtt'))
         || (resolved ? resolved.replace(/\.[^.]+$/, '.vtt') : null);
       const vttRelative = vttResolved ? path.relative(config.vault, vttResolved) : null;
-      if (vttResolved && fs.existsSync(vttResolved)) {
-        jsonReply(res, 200, { ok: true, status: 'done', vttPath: vttRelative });
-      } else if (resolved && _transcribeInProgress.has(resolved)) {
+      // in_progress FIRST: during a force re-transcription the OLD vtt still
+      // exists on disk, so the exists-check alone would falsely report 'done'.
+      if (resolved && _transcribeInProgress.has(resolved)) {
         jsonReply(res, 200, { ok: true, status: 'in_progress' });
+      } else if (vttResolved && fs.existsSync(vttResolved)) {
+        jsonReply(res, 200, { ok: true, status: 'done', vttPath: vttRelative });
       } else {
         jsonReply(res, 200, { ok: true, status: 'not_started' });
       }
@@ -1154,112 +1407,94 @@ const server = http.createServer(async (req, res) => {
         jsonReply(res, 404, { ok: false, error: 'File not found' });
         return;
       }
+      // Legacy (whisper-era) VTT: tell the client and lazily queue a background
+      // re-transcription so a later activation gets clean subtitles + a fresh
+      // alignment (the new VTT's mtime invalidates the cache naturally).
+      const legacyVtt = _isLegacyVtt(vttResolved);
+      const retranscribing = legacyVtt ? _autoRetranscribeLegacy(vttResolved) : false;
+
       // Cache: check for .align.json next to VTT
-      // Invalidate if article or VTT is newer than cache
       const cachePath = vttResolved.replace(/\.vtt$/i, '.align.json');
       if (fs.existsSync(cachePath)) {
         try {
           const cacheMtime = fs.statSync(cachePath).mtimeMs;
           const articleMtime = fs.statSync(articleResolved).mtimeMs;
           const vttMtime = fs.statSync(vttResolved).mtimeMs;
-          if (cacheMtime > articleMtime && cacheMtime > vttMtime) {
-            const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-            // Self-healing:
-            //  (1) version mismatch (align.py logic changed) → regenerate
-            //  (2) low quality (<50% of segments hit by any cue) → regenerate
-            const st = cached.stats || {};
-            const cachedVer = st.version || 0;
-            // Bonus credit for segments that don't appear in audio (footnotes,
-            // 划重点 summary lists) — they correctly stay unmapped. Without
-            // this, articles with many footnotes look "low quality" and
-            // regenerate forever. Heuristic: unmapped tail (>15% of segments
-            // at audio_end) is treated as expected-non-spoken.
-            const tr = cached.segTimeRanges || [];
-            let tailUnmapped = 0;
-            if (tr.length) {
-              // audioEnd = end of the last *narrated* (non-null) segment.
-              let audioEnd = null;
-              for (let i = tr.length - 1; i >= 0; i--) { if (tr[i]) { audioEnd = tr[i].end; break; } }
-              // Trailing non-narrated segments are now null (align.py leaves
-              // them unfilled so the follow-along highlight doesn't jump to the
-              // appendix); legacy caches collapsed them to a point at audioEnd.
-              // Both count as expected-unmapped tail so footnote / 划重点
-              // articles aren't judged low-quality and regenerated forever.
-              for (let i = tr.length - 1; i >= 0; i--) {
-                const r = tr[i];
-                if (!r) { tailUnmapped++; continue; }
-                if (audioEnd !== null && Math.abs(r.start - audioEnd) < 0.01 && Math.abs(r.end - audioEnd) < 0.01) { tailUnmapped++; continue; }
-                break;
-              }
-            }
-            const effSegments = Math.max(1, st.segments - tailUnmapped);
-            const hitRatio = (st.segsHit || 0) / effSegments;
-            if (cachedVer !== ALIGN_VERSION) {
-              console.log(`[align] cache version=${cachedVer} (current=${ALIGN_VERSION}), regenerating: ${cachePath}`);
-            } else if (domSegments && st.segments !== domSegments.length) {
-              // Self-heal: the cache's segment count differs from the browser's
-              // current DOM count (e.g. dist/collectArticleSegments changed, or
-              // an old parse_segments-based cache). Regenerate from DOM segments
-              // so the frontend won't reject it and fall back to LCS.
-              console.log(`[align] cache segCount=${st.segments} != DOM ${domSegments.length}, regenerating: ${cachePath}`);
-            } else if (!st.segments || !st.cues) {
-              // Legitimately empty article or empty VTT (nothing to align) —
-              // version matches, so accept the empty map instead of pointlessly
-              // regenerating it (and re-spawning python) on every request. The
-              // hitRatio heuristic below is only meaningful when cues exist.
-              cached.cached = true;
-              jsonReply(res, 200, { ok: true, ...cached });
-              return;
-            } else if (hitRatio < 0.7) {
-              console.log(`[align] cache low-quality (segsHit=${st.segsHit}/${effSegments} eff, ratio=${hitRatio.toFixed(2)}), regenerating: ${cachePath}`);
+          const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+          const st = cached.stats || {};
+          const ver = alignVersion();
+          let fresh = cacheMtime > articleMtime && cacheMtime > vttMtime;
+          if (!fresh && st.mdHash && st.vttHash
+              && sha1File(articleResolved) === st.mdHash && sha1File(vttResolved) === st.vttHash) {
+            // mtime went stale but the CONTENT didn't change (iCloud touch,
+            // bulk re-sync): adopt the cache and refresh its mtime instead of
+            // burning a full realign.
+            try { const now = new Date(); fs.utimesSync(cachePath, now, now); } catch {}
+            console.log('[align] mtime stale but content unchanged, keeping cache:', path.basename(cachePath));
+            fresh = true;
+          }
+          if (!fresh) {
+            console.log('[align] cache stale, regenerating:', cachePath);
+          } else if ((st.version || 0) !== ver) {
+            // Self-heal (1): version mismatch (align.py logic changed)
+            console.log(`[align] cache version=${st.version || 0} (current=${ver}), regenerating: ${cachePath}`);
+          } else if (domSegments && st.segments !== domSegments.length) {
+            // Self-heal (2): segment count differs from the browser's current
+            // DOM count (e.g. dist/collectArticleSegments changed, or an old
+            // parse_segments-based cache). Regenerate from DOM segments so the
+            // frontend won't reject it and fall back to LCS.
+            console.log(`[align] cache segCount=${st.segments} != DOM ${domSegments.length}, regenerating: ${cachePath}`);
+          } else if (!st.segments || !st.cues) {
+            // Legitimately empty article or empty VTT (nothing to align) —
+            // version matches, so accept the empty map instead of pointlessly
+            // regenerating it on every request.
+            cached.cached = true;
+            jsonReply(res, 200, { ok: true, legacyVtt, retranscribing, ...cached });
+            return;
+          } else {
+            // Self-heal (3): low quality — but only ONCE per inputs. The
+            // algorithm is deterministic, so if a regeneration confirmed the
+            // low ratio (lowQualityConfirmed) a further re-run on identical
+            // inputs can't do better and would just burn ~10s + an iCloud
+            // cache rewrite on every open.
+            const { hitRatio, effSegments } = _alignQuality(cached);
+            if (hitRatio < 0.7 && !st.lowQualityConfirmed) {
+              console.log(`[align] cache low-quality (segsHit=${st.segsHit}/${effSegments} eff, ratio=${hitRatio.toFixed(2)}), regenerating once: ${cachePath}`);
             } else {
               cached.cached = true;
-              jsonReply(res, 200, { ok: true, ...cached });
+              jsonReply(res, 200, { ok: true, legacyVtt, retranscribing, ...cached });
               return;
             }
-          } else {
-            console.log('[align] cache stale, regenerating:', cachePath);
           }
         } catch (e) { /* cache corrupted or stat failed, regenerate */ }
       }
-      // Run align.py (pass the browser's DOM segments when supplied so the
-      // alignment's segment count matches the frontend exactly).
-      const alignScript = path.join(DIR, 'align.py');
-      const alignArgs = [alignScript, articleResolved, vttResolved, cachePath];
-      let segTmp = null;
-      if (domSegments) {
-        try {
-          segTmp = path.join(require('os').tmpdir(), `align-segs-${process.pid}-${Date.now()}.json`);
-          fs.writeFileSync(segTmp, JSON.stringify(domSegments));
-          alignArgs.splice(1, 0, '--segments', segTmp);
-        } catch (e) { segTmp = null; }
+      // Generate — deduped across concurrent requests for the same cache file
+      // (two devices opening the same article used to double-run the model and
+      // could interleave a non-atomic cache write into a truncated JSON).
+      let job = _alignInFlight.get(cachePath);
+      if (!job) {
+        job = _generateAlignment(articleResolved, vttResolved, cachePath, domSegments)
+          .then(() => {
+            // If the FRESH result is still low-quality, stamp it confirmed so
+            // the cache check above accepts it from now on (see self-heal (3)).
+            try {
+              const result = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+              const { hitRatio, effSegments } = _alignQuality(result);
+              if (hitRatio < 0.7 && result.stats) {
+                console.log(`[align] fresh result low-quality (ratio=${hitRatio.toFixed(2)}, eff=${effSegments}) — confirming to stop the regen loop: ${path.basename(cachePath)}`);
+                result.stats.lowQualityConfirmed = true;
+                const tmp = cachePath + '.tmp-annotate';
+                fs.writeFileSync(tmp, JSON.stringify(result));
+                fs.renameSync(tmp, cachePath);
+              }
+            } catch {}
+          })
+          .finally(() => _alignInFlight.delete(cachePath));
+        _alignInFlight.set(cachePath, job);
       }
-      const cleanupSeg = () => { if (segTmp) { try { fs.unlinkSync(segTmp); } catch (e) {} segTmp = null; } };
-      const proc = spawn(PYTHON, alignArgs, {
-        timeout: 60000,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-      });
-      let stderr = '';
-      proc.stderr.on('data', d => stderr += d.toString());
-      proc.on('close', (code) => {
-        cleanupSeg();
-        if (code === 0 && fs.existsSync(cachePath)) {
-          try {
-            const result = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-            jsonReply(res, 200, { ok: true, ...result });
-          } catch (e) {
-            jsonReply(res, 500, { ok: false, error: 'Failed to read alignment result' });
-          }
-        } else {
-          console.error('[align] failed:', stderr.slice(-500));
-          jsonReply(res, 500, { ok: false, error: 'Alignment failed: ' + stderr.slice(-200) });
-        }
-      });
-      proc.on('error', (err) => {
-        cleanupSeg();
-        console.error('[align] spawn error:', err.message);
-        jsonReply(res, 500, { ok: false, error: 'Spawn failed: ' + err.message });
-      });
+      await job;
+      const result = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+      jsonReply(res, 200, { ok: true, legacyVtt, retranscribing, ...result });
     } catch (e) {
       console.error('[align] error:', e.message);
       jsonReply(res, 500, { ok: false, error: e.message });
