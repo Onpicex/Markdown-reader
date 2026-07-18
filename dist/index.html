@@ -215,6 +215,54 @@ a.wl:hover{color:#3a6ed8;border-bottom-color:#3a6ed8}
 .welcome .st .num{display:block;font-size:28px;font-weight:700;color:var(--gold)}
 .welcome .st .lbl{font-size:12px;color:var(--text-3)}
 
+/* Stats page (#stats) */
+.spg{max-width:880px;margin:0 auto;padding:24px 24px calc(60px + env(safe-area-inset-bottom))}
+.spg h2{font-size:16px;font-weight:700;margin:30px 0 12px;color:var(--text-title)}
+.spg h2:first-child{margin-top:4px}
+.sp-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.sp-card{border:1px solid var(--border);border-radius:10px;padding:14px 16px;background:var(--bg-side);transition:background var(--tr)}
+.sp-card .t{font-size:12px;color:var(--text-3);margin-bottom:6px}
+.sp-card .n{font-size:22px;font-weight:700;color:var(--gold);line-height:1.2}
+.sp-card .s{font-size:12px;color:var(--text-2);margin-top:6px;line-height:1.5}
+.hm-wrap{overflow-x:auto;padding-bottom:4px}
+.hm-months{display:grid;grid-auto-flow:column;grid-auto-columns:13px;font-size:10px;color:var(--text-3);margin-bottom:4px;white-space:nowrap}
+.hm-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,11px);grid-auto-columns:11px;gap:2px}
+.hmc{width:11px;height:11px;border-radius:2px;background:var(--bg-side-active)}
+.hmc.hm1{background:var(--gold);opacity:.3}
+.hmc.hm2{background:var(--gold);opacity:.55}
+.hmc.hm3{background:var(--gold);opacity:.8}
+.hmc.hm4{background:var(--gold)}
+.hmc.hmr{background:transparent;box-shadow:inset 0 0 0 1.5px var(--gold);opacity:.5}
+.hm-legend{display:flex;align-items:center;gap:4px;justify-content:flex-end;margin-top:6px;font-size:11px;color:var(--text-3)}
+.hm-legend .hmc{flex:none}
+.sp-course{display:flex;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid var(--border);cursor:pointer}
+.sp-course:hover{background:var(--bg-side-hover)}
+.sp-course .cn{flex:1;min-width:0;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-course .bar{width:140px;height:6px;border-radius:3px;background:var(--bg-side-active);overflow:hidden;flex:none}
+.sp-course .bar i{display:block;height:100%;background:var(--gold);border-radius:3px}
+.sp-course .pct{width:76px;text-align:right;font-size:12px;color:var(--text-2);flex:none;font-variant-numeric:tabular-nums}
+.sp-course .tm{width:80px;text-align:right;font-size:12px;color:var(--text-3);flex:none}
+.sp-row{display:flex;align-items:baseline;gap:12px;padding:9px 2px;border-bottom:1px solid var(--border);cursor:pointer}
+.sp-row:hover{background:var(--bg-side-hover)}
+.sp-row .rt{flex:1;min-width:0;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-row .rt .rc{font-size:11px;color:var(--text-3);margin-left:8px}
+.sp-row .rm{font-size:12px;color:var(--text-3);flex:none;font-variant-numeric:tabular-nums}
+.sp-row .rt .done{color:var(--gold);margin-right:4px}
+.spg details{margin-top:8px}
+.spg details summary{font-size:12px;color:var(--text-3);cursor:pointer;padding:6px 2px;user-select:none}
+.sp-health{display:flex;gap:28px;flex-wrap:wrap;margin-top:4px}
+.sp-health .st .num{display:block;font-size:22px;font-weight:700;color:var(--gold)}
+.sp-health .st .lbl{font-size:12px;color:var(--text-3)}
+.sp-retrans{margin-top:14px;font-size:12px;color:var(--text-2)}
+.sp-retrans .bar{height:6px;border-radius:3px;background:var(--bg-side-active);overflow:hidden;margin-top:6px;max-width:420px}
+.sp-retrans .bar i{display:block;height:100%;background:var(--gold);border-radius:3px}
+.sp-empty{font-size:13px;color:var(--text-3);padding:10px 2px}
+@media (max-width:768px){
+  .spg{padding:16px 14px calc(60px + env(safe-area-inset-bottom))}
+  .sp-course .bar{width:72px}
+  .sp-course .tm{display:none}
+}
+
 /* Loading */
 .ld{text-align:center;padding:60px 0;color:var(--text-3);font-size:14px}
 .ld .sp{display:inline-block;width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin .7s linear infinite;margin-bottom:10px}
@@ -526,6 +574,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
     <div class="side-ft" id="sft">
       <span></span>
       <span>
+        <button class="rescan-btn" id="statsBtn" title="阅读统计">📊</button>
         <button class="rescan-btn" id="settings" title="设置">⚙️</button>
         <button class="rescan-btn" id="rescan" title="重新扫描 vault">🔄</button>
       </span>
@@ -649,6 +698,7 @@ mark.ann-flash{animation:annFlash .5s ease 3}
 
 const DEFAULT_FS=18;
 let C=null,curId=null,fs=DEFAULT_FS,dark=false;
+let statsOpen=false; // #stats view is on screen (curId stays null there)
 const $=id=>document.getElementById(id);
 const app=$('app'),loginOverlay=$('loginOverlay'),loginPw=$('loginPw'),loginBtn=$('loginBtn'),loginErr=$('loginErr');
 const side=$('side'),ov=$('ov'),snav=$('snav'),sft=$('sft'),search=$('search'),
@@ -1079,7 +1129,8 @@ async function init(){
       const idPart=qi>=0?rawHash.slice(0,qi):rawHash;
       let hl='';
       if(qi>=0){ try{ hl=decodeURIComponent(new URLSearchParams(rawHash.slice(qi+1)).get('highlight')||''); }catch(e){} }
-      if(idPart)loadArticle(decodeURIComponent(idPart), hl);
+      if(idPart==='stats')showStats();
+      else if(idPart)loadArticle(decodeURIComponent(idPart), hl);
     }
     // SSE: live catalog updates. Do NOT close() on error — EventSource
     // auto-reconnects; closing it (even after a successful reconnect) would
@@ -1288,7 +1339,9 @@ async function loadArticle(id, highlightText){
   // ghost dirty flags prompting to "discard" an editor that no longer exists.
   editMode=false;
   editDirty=false;
+  statsOpen=false;
   const _tok=++_loadToken;
+  if(typeof Stats!=='undefined')Stats.onNavigate();
   if(typeof TTS!=='undefined'){TTS.stop();TTS.audio=null;TTS.cues=[];TTS.segments=[];TTS.segMap=[];TTS._segTimeRanges=null;TTS._hlEl=null;}
   if(typeof InlineAudio!=='undefined'){for(const k of InlineAudio.active.keys())InlineAudio.deactivate(k);}
   ct.innerHTML='<div class="ld"><div class="sp"></div><div>加载中...</div></div>';
@@ -1761,8 +1814,10 @@ ov.addEventListener('click',closeSide);
 // ── Go home (welcome view) — shared by logo click and back-to-empty-hash ──
 function goHome(){
   ++_loadToken; // invalidate any in-flight loadArticle so it can't "bounce back"
+  if(typeof Stats!=='undefined')Stats.onNavigate();
   if(typeof TTS!=='undefined')TTS.stop();
   curId=null;
+  statsOpen=false;
   editMode=false;
   editDirty=false;
   if(typeof editToggle!=='undefined')editToggle.style.display='none';
@@ -1776,6 +1831,165 @@ document.querySelector('.side-brand').addEventListener('click',function(){
   if(!confirmDiscardEdit())return;
   location.hash='';
   goHome();
+});
+
+// ── 阅读统计页 (#stats) ─────────────────────────
+function fmtDur(ms){
+  ms=ms||0;
+  const m=Math.round(ms/60000);
+  if(m<1)return ms>0?'<1分钟':'0分钟';
+  if(m<60)return m+'分钟';
+  const hh=Math.floor(m/60),mm=m%60;
+  return mm?hh+'小时'+mm+'分':hh+'小时';
+}
+function fmtDayRel(day){
+  if(!day)return '';
+  const d=new Date(day+'T00:00:00');
+  if(isNaN(d))return day;
+  const t=new Date();t.setHours(0,0,0,0);
+  const diff=Math.round((t-d)/86400000);
+  if(diff<=0)return '今天';
+  if(diff===1)return '昨天';
+  if(diff<30)return diff+' 天前';
+  if(diff<365)return Math.floor(diff/30)+' 个月前';
+  return Math.floor(diff/365)+' 年前';
+}
+function renderHeatmap(hm){
+  const today=new Date();today.setHours(0,0,0,0);
+  const di=(today.getDay()+6)%7; // Monday-start row index
+  const start=new Date(today);start.setDate(start.getDate()-(51*7+di));
+  const fmt=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  let cells='';const labels=[];let idx=0;
+  const cur=new Date(start);
+  while(cur<=today){
+    const key=fmt(cur);
+    const v=hm[key];const ms=v?v[0]:0,reads=v?v[1]:0;
+    let cls='';
+    if(ms>=90*60000)cls=' hm4';else if(ms>=45*60000)cls=' hm3';else if(ms>=15*60000)cls=' hm2';else if(ms>0)cls=' hm1';else if(reads>0)cls=' hmr';
+    let tip=key;
+    if(ms>0)tip+=' · '+fmtDur(ms);
+    if(reads>0)tip+=' · 读完 '+reads+' 篇';
+    cells+='<div class="hmc'+cls+'" title="'+ha(tip)+'"></div>';
+    if(cur.getDate()===1)labels[Math.floor(idx/7)]=(cur.getMonth()+1)+'月';
+    idx++;cur.setDate(cur.getDate()+1);
+  }
+  const cols=Math.ceil(idx/7);
+  let mrow='';
+  for(let i=0;i<cols;i++)mrow+='<div>'+(labels[i]||'')+'</div>';
+  return '<div class="hm-wrap" id="hmWrap"><div class="hm-months">'+mrow+'</div><div class="hm-grid">'+cells+'</div></div>'
+    +'<div class="hm-legend">少<div class="hmc"></div><div class="hmc hm1"></div><div class="hmc hm2"></div><div class="hmc hm3"></div><div class="hmc hm4"></div>多<span style="width:12px"></span><div class="hmc hmr"></div>仅篇数（埋点上线前）</div>';
+}
+function renderStatsPage(s){
+  const card=(t,n,sub)=>'<div class="sp-card"><div class="t">'+t+'</div><div class="n">'+n+'</div>'+(sub?'<div class="s">'+sub+'</div>':'')+'</div>';
+  const pair=o=>'阅读 '+fmtDur(o.readMs)+' · 听读 '+fmtDur(o.listenMs);
+  const courseRow=(c,showLast)=>{
+    const pct=c.total?Math.round(c.read/c.total*100):0;
+    return '<div class="sp-course" data-sub="'+ha(c.sub||'')+'" title="'+ha(c.name+(c.lastDay?' · 最近活动 '+c.lastDay:''))+'">'
+      +'<span class="cn">'+h(c.name)+'</span>'
+      +'<span class="bar"><i style="width:'+pct+'%"></i></span>'
+      +'<span class="pct">'+c.read+'/'+c.total+'</span>'
+      +'<span class="tm">'+(showLast?(fmtDayRel(c.lastDay)||'很久前'):(c.ms?fmtDur(c.ms):''))+'</span></div>';
+  };
+  const tw=s.today||{},wk=s.week||{},mo=s.month||{},al=s.allTime||{};
+  let html='<div class="spg">';
+  html+='<h2>总览</h2><div class="sp-cards">';
+  html+=card('今日',fmtDur((tw.readMs||0)+(tw.listenMs||0)),pair(tw));
+  html+=card('本周',fmtDur((wk.readMs||0)+(wk.listenMs||0)),pair(wk)+'<br>读完 '+(wk.finished||0)+' 篇');
+  html+=card('本月',fmtDur((mo.readMs||0)+(mo.listenMs||0)),pair(mo)+'<br>读完 '+(mo.finished||0)+' 篇');
+  html+=card('累计',fmtDur((al.readMs||0)+(al.listenMs||0)),pair(al)+'<br>读完 '+(al.finished||0)+' 篇');
+  html+='</div>';
+  html+='<h2>阅读热力图</h2>'+renderHeatmap(s.heatmap||{});
+  const recent=(s.recent||[]).slice(0,8);
+  html+='<h2>继续读</h2>';
+  if(recent.length){
+    for(const r of recent){
+      html+='<div class="sp-row" data-goto="'+ha(r.id)+'"><span class="rt">'+(r.read?'<span class="done">✓</span>':'')+h(r.title)
+        +'<span class="rc">'+h((r.course||'').split('/').pop())+'</span></span>'
+        +'<span class="rm">'+fmtDayRel(r.lastDay)+' · '+fmtDur(r.ms)+'</span></div>';
+    }
+  }else html+='<div class="sp-empty">还没有时长记录，去读一篇吧</div>';
+  const cs=s.courses||[];
+  const active=cs.filter(c=>c.read>0||c.ms>0);
+  const rest=cs.filter(c=>!(c.read>0||c.ms>0));
+  html+='<h2>课程进度</h2>';
+  if(active.length)for(const c of active)html+=courseRow(c);
+  else html+='<div class="sp-empty">暂无进行中的课程</div>';
+  if(rest.length){
+    html+='<details><summary>未开始（'+rest.length+' 组）</summary>';
+    for(const c of rest)html+=courseRow(c);
+    html+='</details>';
+  }
+  // Started-but-unfinished courses idle 30+ days; recently-touched ones are
+  // not "最久未动" no matter how the sort lands.
+  const _sc=new Date(Date.now()-30*86400000); // local date, not toISOString's UTC
+  const staleCut=_sc.getFullYear()+'-'+String(_sc.getMonth()+1).padStart(2,'0')+'-'+String(_sc.getDate()).padStart(2,'0');
+  const stale=cs.filter(c=>c.read>0&&c.read<c.total&&(c.lastDay||'')<staleCut).sort((a,b)=>(a.lastDay||'')<(b.lastDay||'')?-1:1).slice(0,3);
+  if(stale.length){
+    html+='<h2>最久未动</h2>';
+    for(const c of stale)html+=courseRow(c,true);
+  }
+  const lib=s.library||{};
+  html+='<h2>库存健康</h2><div class="sp-health">';
+  html+='<div class="st"><span class="num">'+(lib.totalArticles||0)+'</span><span class="lbl">篇文章</span></div>';
+  html+='<div class="st"><span class="num">'+(lib.withAudio||0)+'</span><span class="lbl">含音频</span></div>';
+  const vp=lib.withAudio?Math.round((lib.withVtt||0)/lib.withAudio*100):0;
+  html+='<div class="st"><span class="num">'+vp+'%</span><span class="lbl">字幕覆盖 '+(lib.withVtt||0)+'/'+(lib.withAudio||0)+'</span></div>';
+  const qp=lib.withVtt?Math.round((lib.qwenVtt||0)/lib.withVtt*100):0;
+  html+='<div class="st"><span class="num">'+qp+'%</span><span class="lbl">Qwen 字幕 '+(lib.qwenVtt||0)+'/'+(lib.withVtt||0)+'</span></div>';
+  html+='</div>';
+  if(s.retranscribe){
+    const rt=s.retranscribe;
+    const pct=rt.total?Math.round(rt.done/rt.total*100):0;
+    html+='<div class="sp-retrans">字幕批量重转：'+(rt.done||0)+'/'+(rt.total||0)+'（'+pct+'%'+(rt.failed?'，失败 '+rt.failed:'')+'）'
+      +(rt.finishedAt?' · 已完成 '+h(rt.finishedAt):(rt.updatedAt?' · 更新于 '+h(rt.updatedAt):''))
+      +'<div class="bar"><i style="width:'+pct+'%"></i></div></div>';
+  }
+  html+='</div>';
+  return html;
+}
+function wireStatsPage(){
+  const root=ct.querySelector('.spg');
+  if(!root)return;
+  root.addEventListener('click',e=>{
+    const g=e.target.closest('[data-goto]');
+    if(g){location.hash=encodeURIComponent(g.dataset.goto);return;}
+    const c=e.target.closest('[data-sub]');
+    if(c&&c.dataset.sub)expandSidebarTo(c.dataset.sub,c.dataset.sub.includes('/')?'sub':'cat');
+  });
+  const w=document.getElementById('hmWrap');
+  if(w)w.scrollLeft=w.scrollWidth; // land on "now" — the right edge
+}
+async function showStats(){
+  if(!confirmDiscardEdit()){if(curId)location.hash=encodeURIComponent(curId);return;}
+  ++_loadToken; // supersede any in-flight loadArticle
+  const _tok=_loadToken;
+  if(typeof Stats!=='undefined')Stats.onNavigate();
+  if(typeof TTS!=='undefined')TTS.stop();
+  if(typeof InlineAudio!=='undefined'){for(const k of InlineAudio.active.keys())InlineAudio.deactivate(k);}
+  curId=null;statsOpen=true;editMode=false;editDirty=false;
+  if(typeof editToggle!=='undefined')editToggle.style.display='none';
+  document.querySelectorAll('.ai.active').forEach(el=>el.classList.remove('active'));
+  bc.innerHTML='<span class="bc-leaf">阅读统计</span>';
+  if(decodeURIComponent(location.hash.slice(1)||'')!=='stats')location.hash='stats';
+  ct.innerHTML='<div class="ld"><div class="sp"></div><div>统计加载中...</div></div>';
+  closeSide();
+  try{
+    const r=await fetch('/api/stats/summary',{cache:'no-store'});
+    if(r.status===401){handle401(r);return;}
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const s=await r.json();
+    if(_tok!==_loadToken||!statsOpen)return;
+    ct.innerHTML=renderStatsPage(s);
+    wireStatsPage();
+    ct.scrollTop=0;
+  }catch(e){
+    if(_tok===_loadToken&&statsOpen)ct.innerHTML='<div class="ld">统计加载失败</div>';
+    console.error('[stats]',e);
+  }
+}
+document.getElementById('statsBtn').addEventListener('click',function(){
+  if(statsOpen){showStats();return;} // already there — refresh
+  location.hash='stats';             // routed through hashchange
 });
 
 // ── Back to top ──────────────────────────────────────
@@ -1802,7 +2016,9 @@ window.addEventListener('hashchange',function(){
   // same article on every navigation (CJK ids never matched).
   const raw=location.hash.slice(1);
   const id=raw?decodeURIComponent(raw.split('?')[0]):'';
+  if(id==='stats'){if(!statsOpen)showStats();return;}
   if(id&&id!==curId)loadArticle(id);
+  else if(!id&&statsOpen&&!curId){goHome();return;}
   else if(!id&&curId){
     // Back button reached the empty-hash (home) history entry. Doing nothing
     // here left the article on screen — "the back button is broken" — and on
@@ -3317,6 +3533,93 @@ document.addEventListener('visibilitychange',()=>{
     if(a&&a.currentTime>0)_iaSavePos(a,em.dataset.audioPath||'');
   });
 });
+
+// ── 阅读/听读时长埋点 ─────────────────────────
+// Two disjoint clocks per article: listenMs = wall time with an audio embed
+// actually playing (event-timestamp based, so lock-screen playback and
+// throttled background tabs still count correctly); readMs = screen-on
+// reading time (5s ticks gated on tab visibility + an interaction within
+// IDLE_MS, so a tab left open overnight counts nothing). While audio plays,
+// ticks skip readMs — the two never overlap, their sum is honest total time.
+// Deltas flush to /api/stats/heartbeat every 60s; page hide flushes via
+// sendBeacon. A lost beacon loses ≤1min — accepted, no retry queue.
+const Stats={
+  IDLE_MS:3*60*1000,
+  pending:new Map(),            // id -> {r,l} ms not yet sent
+  _lastInteract:Date.now(),
+  _lastTick:Date.now(),
+  _playing:new Set(),           // <audio> elements currently playing
+  _listenStart:0,               // ts when playing-count went 0 -> 1
+  _listenArticle:null,          // article the open listen segment belongs to
+  add(id,r,l){
+    if(!id||(r<1&&l<1))return;
+    const p=this.pending.get(id)||{r:0,l:0};
+    p.r+=r;p.l+=l;
+    this.pending.set(id,p);
+  },
+  // Close (or roll forward) the open listen segment. Zombie guard: an <audio>
+  // destroyed by innerHTML replacement never fires 'pause' through the
+  // document capture listener, so re-check isConnected/paused here.
+  _foldListen(keepOpen){
+    for(const a of[...this._playing])if(!a.isConnected||a.paused||a.ended)this._playing.delete(a);
+    if(!this._listenStart)return;
+    const now=Date.now();
+    this.add(this._listenArticle,0,now-this._listenStart);
+    if(keepOpen&&this._playing.size){this._listenStart=now;}
+    else{this._listenStart=0;this._listenArticle=null;}
+  },
+  onPlay(a){
+    if(this._playing.has(a))return;
+    this._foldListen(false); // settle any prior segment (article switch mid-play)
+    this._playing.add(a);
+    if(!this._listenStart){this._listenStart=Date.now();this._listenArticle=curId;}
+  },
+  onPauseLike(a){
+    this._playing.delete(a);
+    if(this._playing.size===0)this._foldListen(false);
+  },
+  onNavigate(){this._foldListen(false);this._playing.clear();},
+  tick(){
+    const now=Date.now();
+    const dt=now-this._lastTick;
+    this._lastTick=now;
+    this._foldListen(true);
+    if(dt<=0||dt>15000)return;    // slept/throttled gap — never backfill
+    if(!curId||document.visibilityState!=='visible')return;
+    if(this._playing.size>0)return; // audio time is already on the listen clock
+    if(now-this._lastInteract>this.IDLE_MS)return;
+    this.add(curId,dt,0);
+  },
+  flush(useBeacon){
+    this._foldListen(true);
+    if(!this.pending.size)return;
+    const entries=[...this.pending.entries()].map(([id,p])=>({id,readMs:Math.round(p.r),listenMs:Math.round(p.l)}));
+    this.pending.clear();
+    const payload=JSON.stringify({entries});
+    if(useBeacon&&navigator.sendBeacon){
+      try{navigator.sendBeacon('/api/stats/heartbeat',new Blob([payload],{type:'application/json'}));return;}catch(e){}
+    }
+    fetch('/api/stats/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true})
+      .then(r=>{if(!r.ok)throw 0;})
+      .catch(()=>{for(const en of entries)this.add(en.id,en.readMs,en.listenMs);}); // retry next beat
+  },
+};
+(function(){
+  const touch=()=>{Stats._lastInteract=Date.now();};
+  for(const ev of['pointerdown','keydown','wheel','touchstart'])document.addEventListener(ev,touch,{passive:true});
+  ct.addEventListener('scroll',touch,{passive:true});
+  // Media events don't bubble but do capture — one listener covers every
+  // article-embedded <audio> (TTS uses a detached Audio(), never captured
+  // here, so machine reading doesn't count as 听读).
+  const inEmbed=t=>t instanceof HTMLMediaElement&&t.closest&&t.closest('.audio-embed');
+  document.addEventListener('play',e=>{if(inEmbed(e.target))Stats.onPlay(e.target);},true);
+  document.addEventListener('pause',e=>{if(inEmbed(e.target))Stats.onPauseLike(e.target);},true);
+  document.addEventListener('ended',e=>{if(inEmbed(e.target))Stats.onPauseLike(e.target);},true);
+  setInterval(()=>Stats.tick(),5000);
+  setInterval(()=>Stats.flush(false),60000);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')Stats.flush(true);});
+  window.addEventListener('pagehide',()=>Stats.flush(true));
+})();
 
 // ── 内嵌 MP3 字幕跟读 ─────────────────────────
 const InlineAudio={

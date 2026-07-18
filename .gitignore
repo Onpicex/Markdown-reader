@@ -2,8 +2,9 @@
 config.json
 .session-secret
 
-# User reading data (cross-device sync state)
+# User reading data (cross-device sync state + reading-time stats)
 read-articles.json
+stats.json
 
 # Generated catalog
 dist/data/catalog.json

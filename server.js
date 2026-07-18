@@ -152,6 +152,235 @@ function _persistReadState() {
 }
 _loadReadState();
 
+// ── Reading stats (time-on-article, per local day) ───
+// Aggregated at write time: _stats.days[YYYY-MM-DD][articleId] = [readMs, listenMs].
+// Clients send monotonic *deltas* (60s heartbeats + a final sendBeacon), so
+// multi-device merging is plain addition — no LWW needed. Granularity is
+// deliberately day×article: enough for every stats-page view, tiny on disk,
+// and never needs pruning.
+const STATS_PATH = path.join(DIR, 'stats.json');
+// Per-entry delta cap. A legit flush is ≤60s of wall clock; 30 min absorbs a
+// missed-beacon backlog while making a client clock jump harmless.
+const STATS_MAX_DELTA_MS = 30 * 60 * 1000;
+let _stats = { days: {} };
+let _statsDirty = false;
+let _statsFlushTimer = null;
+function _loadStats() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(STATS_PATH, 'utf-8'));
+    if (obj && typeof obj === 'object' && obj.days && typeof obj.days === 'object') _stats = { days: obj.days };
+  } catch {}
+}
+function _persistStats() {
+  _statsDirty = false;
+  const tmp = STATS_PATH + '.tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(_stats, null, 0) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, STATS_PATH);
+  } catch (e) {
+    console.warn('[stats] persist failed:', e.message);
+  }
+}
+// Coalesce bursts (two devices heartbeating together) into one write.
+function _scheduleStatsFlush() {
+  _statsDirty = true;
+  if (_statsFlushTimer) return;
+  _statsFlushTimer = setTimeout(() => {
+    _statsFlushTimer = null;
+    if (_statsDirty) _persistStats();
+  }, 5000);
+  if (_statsFlushTimer.unref) _statsFlushTimer.unref();
+}
+function _localDayStr(ts) {
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _addStatsDelta(articleId, readMs, listenMs) {
+  const day = _localDayStr(Date.now());
+  const bucket = _stats.days[day] || (_stats.days[day] = {});
+  const cur = bucket[articleId] || (bucket[articleId] = [0, 0]);
+  cur[0] += readMs;
+  cur[1] += listenMs;
+}
+_loadStats();
+
+// ── Stats summary helpers ────────────────────────────
+// Catalog snapshot for stats rollups, re-parsed only when the file changes.
+let _statsCatCache = { mtime: -1, arts: [] };
+function _statsCatalogArts() {
+  try {
+    const mt = fs.statSync(CATALOG_PATH).mtimeMs;
+    if (mt !== _statsCatCache.mtime) {
+      const c = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8'));
+      _statsCatCache = { mtime: mt, arts: Array.isArray(c.articles) ? c.articles : [] };
+    }
+  } catch {}
+  return _statsCatCache.arts;
+}
+
+// Audio/subtitle coverage walks every article with an audio sibling
+// (~1200 stat + head reads) — cached and refreshed at most every 10 min.
+const _VTT_COV_TTL_MS = 10 * 60 * 1000;
+let _vttCovCache = { at: 0, catalogMtime: -1, cov: null };
+function _libraryCoverage() {
+  const arts = _statsCatalogArts();
+  const now = Date.now();
+  if (_vttCovCache.cov && _vttCovCache.catalogMtime === _statsCatCache.mtime && now - _vttCovCache.at < _VTT_COV_TTL_MS) {
+    return _vttCovCache.cov;
+  }
+  let withAudio = 0, withVtt = 0, qwenVtt = 0;
+  const vault = config.vault || '';
+  for (const a of arts) {
+    const audio = a.meta && a.meta.audio;
+    if (!audio || typeof audio !== 'string') continue;
+    withAudio++;
+    if (!vault) continue;
+    const dot = audio.lastIndexOf('.');
+    if (dot <= audio.lastIndexOf('/')) continue;
+    const vtt = path.join(vault, audio.slice(0, dot) + '.vtt');
+    try {
+      if (!fs.existsSync(vtt)) continue;
+      withVtt++;
+      if (!_isLegacyVtt(vtt)) qwenVtt++;
+    } catch {}
+  }
+  const cov = { totalArticles: arts.length, withAudio, withVtt, qwenVtt };
+  _vttCovCache = { at: now, catalogMtime: _statsCatCache.mtime, cov };
+  return cov;
+}
+
+// Batch re-transcription progress, read from an external state file (the
+// batch job lives outside this repo). Optional: configure
+// config.retranscribeStatePath; when unset the stats page hides the block.
+function _retransState() {
+  const p = config.retranscribeStatePath;
+  if (!p || typeof p !== 'string') return null;
+  try {
+    const s = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return {
+      total: Number(s.total) || 0,
+      done: Number(s.done) || 0,
+      failed: Number(s.failed) || 0,
+      updatedAt: s.updated_at || null,
+      finishedAt: s.finished_at || null,
+    };
+  } catch { return null; }
+}
+
+function _buildStatsSummary() {
+  const now = Date.now();
+  const todayStr = _localDayStr(now);
+  const wk = new Date(now);
+  wk.setHours(0, 0, 0, 0);
+  wk.setDate(wk.getDate() - ((wk.getDay() + 6) % 7)); // Monday-start week
+  const weekStartStr = _localDayStr(wk.getTime());
+  const monthStartStr = todayStr.slice(0, 8) + '01';
+  const yearAgoStr = _localDayStr(now - 366 * 86400000);
+
+  // One pass over the day buckets: period sums, per-article rollup, heatmap.
+  const perArt = new Map(); // id -> { ms, lastDay }
+  const heatmap = {};       // day -> [totalMs, articlesFinished]
+  const today = [0, 0], week = [0, 0], month = [0, 0], allTime = [0, 0];
+  for (const [day, bucket] of Object.entries(_stats.days)) {
+    let dayMs = 0;
+    for (const [id, v] of Object.entries(bucket)) {
+      const r = Number(v[0]) || 0, l = Number(v[1]) || 0;
+      dayMs += r + l;
+      const pa = perArt.get(id) || { ms: 0, lastDay: '' };
+      pa.ms += r + l;
+      if (day > pa.lastDay) pa.lastDay = day;
+      perArt.set(id, pa);
+      allTime[0] += r; allTime[1] += l;
+      if (day === todayStr) { today[0] += r; today[1] += l; }
+      if (day >= weekStartStr) { week[0] += r; week[1] += l; }
+      if (day >= monthStartStr) { month[0] += r; month[1] += l; }
+    }
+    if (day >= yearAgoStr && dayMs > 0) heatmap[day] = [dayMs, 0];
+  }
+
+  // Finished-article counts from read-state timestamps. Legacy reads carry
+  // ts=0 — they count toward the all-time total but land on no calendar day,
+  // so pre-instrumentation history shows up honestly as "count, no time".
+  let weekFin = 0, monthFin = 0, totalFin = 0;
+  for (const [id, ts] of _reads) {
+    if (!_isRead(id)) continue;
+    totalFin++;
+    if (!ts) continue;
+    const day = _localDayStr(ts);
+    if (day > todayStr) continue; // future clock skew — keep off the heatmap
+    if (day >= yearAgoStr) (heatmap[day] = heatmap[day] || [0, 0])[1]++;
+    if (day >= weekStartStr) weekFin++;
+    if (day >= monthStartStr) monthFin++;
+  }
+
+  // Course rollup: meta.course groups module subfolders of one course
+  // together; everything else groups by its subcategory path.
+  const arts = _statsCatalogArts();
+  const courseMap = new Map();
+  const artById = new Map();
+  for (const a of arts) {
+    artById.set(a.id, a);
+    // Group key: meta.course when present; otherwise the subcategory's last
+    // path segment. The trailing segment matches meta.course naming, so a
+    // course whose articles only partially carry meta.course (mixed scrape
+    // eras) still rolls up into ONE group instead of two near-duplicates.
+    const key = (a.meta && a.meta.course) ||
+      (a.subcategory ? a.subcategory.split('/').pop() : '') || a.category || '未分类';
+    const c = courseMap.get(key) || { name: key, total: 0, read: 0, ms: 0, lastDay: '', sub: null };
+    // Sidebar anchor for click-through: deepest path shared by the group's
+    // articles (a meta.course can span several module subfolders).
+    const subPath = (a.category || '') + (a.subcategory ? '/' + a.subcategory : '');
+    if (c.sub === null) c.sub = subPath;
+    else if (c.sub !== subPath) {
+      const x = c.sub.split('/'), y = subPath.split('/');
+      let i = 0;
+      while (i < x.length && i < y.length && x[i] === y[i]) i++;
+      c.sub = x.slice(0, i).join('/');
+    }
+    c.total++;
+    if (_isRead(a.id)) {
+      c.read++;
+      const ts = _reads.get(a.id);
+      if (ts) { const d = _localDayStr(ts); if (d > c.lastDay && d <= todayStr) c.lastDay = d; }
+    }
+    const pa = perArt.get(a.id);
+    if (pa) { c.ms += pa.ms; if (pa.lastDay > c.lastDay) c.lastDay = pa.lastDay; }
+    courseMap.set(key, c);
+  }
+  const courses = [...courseMap.values()].sort((x, y) =>
+    x.lastDay === y.lastDay ? y.ms - x.ms : (x.lastDay < y.lastDay ? 1 : -1));
+
+  // Recently-active articles (have logged time + still exist in the catalog).
+  const recent = [...perArt.entries()]
+    .filter(([id]) => artById.has(id))
+    .sort((a, b) => a[1].lastDay === b[1].lastDay ? b[1].ms - a[1].ms : (a[1].lastDay < b[1].lastDay ? 1 : -1))
+    .slice(0, 10)
+    .map(([id, pa]) => {
+      const a = artById.get(id);
+      return {
+        id,
+        title: a.title,
+        course: (a.meta && a.meta.course) || a.subcategory || '',
+        ms: pa.ms,
+        lastDay: pa.lastDay,
+        read: _isRead(id),
+      };
+    });
+
+  return {
+    ok: true,
+    today: { readMs: today[0], listenMs: today[1] },
+    week: { readMs: week[0], listenMs: week[1], finished: weekFin },
+    month: { readMs: month[0], listenMs: month[1], finished: monthFin },
+    allTime: { readMs: allTime[0], listenMs: allTime[1], finished: totalFin },
+    heatmap,
+    courses,
+    recent,
+    library: _libraryCoverage(),
+    retranscribe: _retransState(),
+  };
+}
+
 // ── Auth ─────────────────────────────────────────────
 // HMAC-based stateless tokens: token = base64url(uid).base64url(hmac(uid))
 // Persisted SESSION_SECRET so tokens survive process restarts.
@@ -527,8 +756,8 @@ function _reapChildren() {
     if (p._ocwTmpVtt) { try { fs.unlinkSync(p._ocwTmpVtt); } catch {} }
   }
 }
-process.on('SIGTERM', () => { _reapChildren(); process.exit(0); });
-process.on('SIGINT', () => { _reapChildren(); process.exit(0); });
+process.on('SIGTERM', () => { _reapChildren(); if (_statsDirty) _persistStats(); process.exit(0); });
+process.on('SIGINT', () => { _reapChildren(); if (_statsDirty) _persistStats(); process.exit(0); });
 // Last-resort guards. Without these a single async fs error (e.g. an evicted
 // iCloud placeholder emitting EIO on a read stream) took the whole server
 // down. Rejections are logged and survived; a truly uncaught sync exception
@@ -1010,7 +1239,9 @@ async function _handleRequest(req, res) {
     pathname === '/api/events' ||
     pathname === '/api/read-state' ||
     pathname === '/api/read-state/add' ||
-    pathname === '/api/read-state/remove';
+    pathname === '/api/read-state/remove' ||
+    pathname === '/api/stats/heartbeat' ||
+    pathname === '/api/stats/summary';
 
   if (isProtectedPath && !isAuthed(req)) {
     jsonReply(res, 401, { error: 'Unauthorized' });
@@ -1449,6 +1680,41 @@ async function _handleRequest(req, res) {
       jsonReply(res, 200, { ok: true, removed: changed, total: _readList().length });
     } catch {
       jsonReply(res, 400, { ok: false, error: 'Bad request' });
+    }
+    return;
+  }
+
+  // /api/stats/heartbeat — POST { entries: [{ id, readMs, listenMs }] }
+  // Deltas accumulated client-side; also the sendBeacon target on page hide.
+  if (pathname === '/api/stats/heartbeat' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const data = JSON.parse(body);
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      let applied = 0;
+      for (const e of entries.slice(0, 50)) {
+        if (!e || typeof e.id !== 'string' || !e.id || e.id.length > 512) continue;
+        const r = Math.min(Math.max(Number(e.readMs) || 0, 0), STATS_MAX_DELTA_MS);
+        const l = Math.min(Math.max(Number(e.listenMs) || 0, 0), STATS_MAX_DELTA_MS);
+        if (r < 1 && l < 1) continue;
+        _addStatsDelta(e.id, Math.round(r), Math.round(l));
+        applied++;
+      }
+      if (applied) _scheduleStatsFlush();
+      jsonReply(res, 200, { ok: true, applied });
+    } catch {
+      jsonReply(res, 400, { ok: false, error: 'Bad request' });
+    }
+    return;
+  }
+
+  // /api/stats/summary — everything the stats page renders, in one call
+  if (pathname === '/api/stats/summary' && req.method === 'GET') {
+    try {
+      jsonReply(res, 200, _buildStatsSummary());
+    } catch (e) {
+      console.error('[stats] summary failed:', e.message);
+      jsonReply(res, 500, { ok: false, error: 'summary failed' });
     }
     return;
   }

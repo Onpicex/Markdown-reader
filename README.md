@@ -16,6 +16,10 @@ machine-specific values belong in `config.json`, which is ignored by git.
 - Supports Obsidian wiki links such as `[[Page]]` and embedded media such as
   `![[file.mp3]]`, `![[image.png]]`, and `![[video.mp4]]`.
 - Tracks read/unread state with sidebar checkmarks and persistent storage.
+- Tracks reading and listening time per article (visibility- and
+  interaction-gated on the client, day-level aggregates on the server) and
+  renders a `#stats` page: overview cards, a yearly heatmap, per-course
+  progress, continue-reading shortcuts, and library health.
 - Syncs read state across devices with last-write-wins timestamps and tombstones,
   so "unread" actions do not get resurrected by stale clients.
 - Provides article search from the sidebar.
@@ -123,6 +127,7 @@ Fields:
 | `password` | Browser access password. Empty string disables password protection. Initial password setup without an existing password is allowed only from direct loopback. |
 | `ttsEnabled` | Shows TTS controls only when explicitly `true`. Default behavior is off. |
 | `qwenAsrBin` | Path to the `mlx-qwen3-asr` executable (its own venv) used for local MP3 transcription. Defaults to `mlx-qwen3-asr` on PATH. |
+| `retranscribeStatePath` | Optional. Path to an external batch re-transcription `state.json`; when set, the stats page shows its progress. Leave empty to hide the block. |
 | `mlxWhisperBin` | Legacy/optional path to `mlx_whisper`. No longer used for transcription (replaced by Qwen3-ASR 2026-06-20); kept for reference/fallback. |
 
 Do not commit `config.json`. It may contain a vault path, password, private LAN

@@ -12,6 +12,7 @@
 - 使用 `marked.js` 按需渲染 Markdown。
 - 支持 Obsidian wiki link，例如 `[[Page]]`，以及 `![[file.mp3]]`、`![[image.png]]`、`![[video.mp4]]` 等嵌入媒体。
 - 通过侧边栏勾选标记追踪已读/未读，并持久化保存。
+- 按文章统计阅读/听读时长（前端按「页面可见 + 近期有交互」门控计时，服务端按天聚合），并提供 `#stats` 统计页：总览卡片、年度热力图、课程完成度、继续读入口和库存健康。
 - 使用 per-id last-write-wins 时间戳和 tombstone 同步多设备已读状态，避免旧客户端把已取消的已读状态重新恢复。
 - 侧边栏文章搜索。
 - 字体大小控制、浅色/深色/护眼主题，以及移动端布局支持。
@@ -115,6 +116,7 @@ cp config.example.json config.json
 | `password` | 浏览器访问密码。空字符串会关闭密码保护。没有旧密码时，初次设置密码只允许从 direct loopback 操作。 |
 | `ttsEnabled` | 只有显式设为 `true` 时才显示 TTS 控件。默认关闭。 |
 | `qwenAsrBin` | 本地 MP3 转写用的 `mlx-qwen3-asr` 可执行文件路径（独立 venv）。缺省取 PATH 上的 `mlx-qwen3-asr`。 |
+| `retranscribeStatePath` | 可选。外部批量重转任务的 `state.json` 路径；配置后统计页显示其进度，留空则隐藏该块。 |
 | `mlxWhisperBin` | 旧版/可选的 `mlx_whisper` 路径。转写已于 2026-06-20 改用 Qwen3-ASR，本项不再使用，仅作参考/回退。 |
 
 不要提交 `config.json`。它可能包含 Vault 路径、密码、私有局域网信息或部署相关的代理配置。
